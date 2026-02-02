@@ -40,22 +40,6 @@
 </head>
 
 <body class="bg-slate-50 text-slate-900">
-  <script>
-    window.onerror = function (message, source, lineno, colno, error) {
-      document.body.innerHTML = '<div style="background:black;color:red;padding:20px;font-family:monospace;white-space:pre-wrap;height:100vh;"><h1>CRITICAL ERROR</h1>' +
-        'message: ' + message + '\n' +
-        'source: ' + source + '\n' +
-        'lineno: ' + lineno + '\n' +
-        'colno: ' + colno + '\n' +
-        'error: ' + (error ? error.stack : 'N/A') +
-        '</div>';
-    };
-    window.addEventListener('unhandledrejection', function (event) {
-      document.body.innerHTML = '<div style="background:black;color:red;padding:20px;font-family:monospace;white-space:pre-wrap;height:100vh;"><h1>UNHANDLED PROMISE REJECTION</h1>' +
-        'reason: ' + event.reason +
-        '</div>';
-    });
-  </script>
   <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
 </body>
