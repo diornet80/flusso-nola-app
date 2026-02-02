@@ -1,0 +1,5 @@
+{
+  "name": "Leonardo Track - Nola 5.0",
+  "description": "PWA per il tracciamento del montaggio fusoliera presso lo stabilimento di Nola. Gestione reparti, skin e discrepanze critiche.",
+  "requestFramePermissions": []
+}
