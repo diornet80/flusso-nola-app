@@ -347,31 +347,55 @@ export default function App() {
           const sheet = workbook.Sheets[sheetName];
           const json = XLSX.utils.sheet_to_json(sheet) as any[];
 
+          if (json.length === 0) {
+            alert('Il file Excel sembra vuoto o non leggibile.');
+            setIsScanning(false);
+            return;
+          }
+
           const msnsToUpsert: Partial<MSNUnit>[] = [];
 
           json.forEach(row => {
-            const msnStr = String(row.MSN || row.msn || '');
+            // Normalize keys to lowercase to be case-insensitive
+            const normalizedRow = Object.keys(row).reduce((acc: any, key) => {
+              acc[key.toLowerCase().trim()] = row[key];
+              return acc;
+            }, {});
+
+            const msnStr = String(normalizedRow['msn'] || '');
             if (!msnStr) return;
+
             const parseExcelDate = (val: any) => {
               if (val instanceof Date) return val.toISOString().split('T')[0];
               if (!val) return undefined;
+              // Handle Excel serial dates or strings
               return String(val);
             };
-            const start = parseExcelDate(row.Start || row.start) || new Date().toISOString().split('T')[0];
-            const end = parseExcelDate(row.Finish || row.finish || row.End || row.end) || addHours(start, 1200);
-            const wrapping = parseExcelDate(row.Wrapping || row.wrapping);
-            const shipping = parseExcelDate(row.Shipping || row.shipping || row.FoB || row.fob);
+
+            // Support multiple column names (english/italian)
+            const start = parseExcelDate(normalizedRow['start'] || normalizedRow['inizio']) || new Date().toISOString().split('T')[0];
+            const end = parseExcelDate(normalizedRow['finish'] || normalizedRow['end'] || normalizedRow['fine']) || addHours(start, 1200);
+            const wrapping = parseExcelDate(normalizedRow['wrapping']);
+            const shipping = parseExcelDate(normalizedRow['shipping'] || normalizedRow['fob'] || normalizedRow['spedizione']);
 
             msnsToUpsert.push(processRowData(msnStr, start, end, wrapping, shipping));
           });
 
-          await databaseService.upsertMSNs(msnsToUpsert);
-          await loadData(); // Reload to get fresh data with IDs
+          if (msnsToUpsert.length === 0) {
+            alert('Nessuna MSN trovata nel file. Assicurati che ci sia una colonna chiamata "MSN".');
+            setIsScanning(false);
+            return;
+          }
 
+          await databaseService.upsertMSNs(msnsToUpsert);
+          await loadData();
+
+          alert(`Importazione completata! ${msnsToUpsert.length} unità aggiornate.`);
           setIsScanning(false);
           setShowImport(false);
         } catch (err) {
           console.error("Excel import error:", err);
+          alert('Errore durante l\'importazione: ' + (err as Error).message);
           setIsScanning(false);
         }
       };
