@@ -195,7 +195,7 @@ export default function App() {
         const anySkinKO = schedule.skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO') || false;
         return p === 100 && !anySkinKO;
       }
-      return p === 100 && schedule.qualityStatus !== 'OK'; // Fix logic: ready if 100% and NOT KO? Or explicitly OK? Assuming !KO for now as per original
+      return p === 100 && schedule.qualityStatus !== 'KO';
     });
   };
 
