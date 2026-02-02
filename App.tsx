@@ -392,10 +392,19 @@ export default function App() {
             return;
           }
 
-          await databaseService.upsertMSNs(msnsToUpsert);
+          // Deduplicate MSNs to avoid "ON CONFLICT DO UPDATE command cannot affect row a second time"
+          const uniqueMsnsMap = new Map<string, Partial<MSNUnit>>();
+          msnsToUpsert.forEach(item => {
+            if (item.msn) {
+              uniqueMsnsMap.set(item.msn, item);
+            }
+          });
+          const dedupedMsns = Array.from(uniqueMsnsMap.values());
+
+          await databaseService.upsertMSNs(dedupedMsns);
           await loadData();
 
-          alert(`Importazione completata! ${msnsToUpsert.length} unità aggiornate.`);
+          alert(`Importazione completata! ${dedupedMsns.length} unità aggiornate/inserite.`);
           setIsScanning(false);
           setShowImport(false);
         } catch (err) {
