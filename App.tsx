@@ -3,8 +3,10 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Department, MSNUnit, Operation, DeptSchedule, SkinType, SkinWork, MachineAsset, Discrepancy, DiscrepancySeverity } from './types';
 import { parseMsnDocument } from './services/geminiService';
+import { databaseService } from './services/databaseService';
 
-const STORAGE_KEY = 'chicken-track-v2-data';
+const STORAGE_KEY = 'chicken-track-v2-data'; // DEPRECATED: Using Supabase
+
 
 const SKIN_TYPES: SkinType[] = ['5651', '5656', '5384', '5671', '5646'];
 const SKIN_LABELS: Record<SkinType, string> = {
@@ -20,18 +22,18 @@ const MACHINE_ASSETS: MachineAsset[] = [
 ];
 
 const DEP_ORDER = [
-  Department.AUTOMATIZZATI, 
-  Department.PANNELLI, 
-  Department.TOP, 
+  Department.AUTOMATIZZATI,
+  Department.PANNELLI,
+  Department.TOP,
   Department.FINALE,
   Department.IMBALLAGGIO
 ];
 
 const addHours = (date: string | Date | undefined, hours: number) => {
   if (!date) return new Date().toISOString().split('T')[0];
-  
+
   let d = new Date(date);
-  
+
   if (isNaN(d.getTime())) {
     if (typeof date === 'string') {
       const parts = date.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
@@ -100,7 +102,7 @@ const createMsnSchedules = (start: string) => {
     operations: [],
     skins: createInitialSkins()
   };
-  
+
   const others = DEP_ORDER.slice(1);
   others.forEach(dept => {
     const prevDept = DEP_ORDER[DEP_ORDER.indexOf(dept) - 1];
@@ -121,10 +123,8 @@ const INITIAL_EXAMPLES: MSNUnit[] = [
 ];
 
 export default function App() {
-  const [msns, setMsns] = useState<MSNUnit[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : INITIAL_EXAMPLES;
-  });
+  const [msns, setMsns] = useState<MSNUnit[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [view, setView] = useState<'dashboard' | 'unit' | 'dept-flow' | 'shipments'>('dashboard');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -132,7 +132,7 @@ export default function App() {
   const [activeSkin, setActiveSkin] = useState<SkinType | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [importMode, setImportMode] = useState<'file' | 'manual'>('file');
-  
+
   const [manualMsn, setManualMsn] = useState('');
   const [manualStartDate, setManualStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [manualEndDate, setManualEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -147,6 +147,22 @@ export default function App() {
   const [msnToShip, setMsnToShip] = useState<string | null>(null);
 
   const selectedMsn = useMemo(() => msns.find(m => m.id === selectedId), [msns, selectedId]);
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+      const data = await databaseService.fetchAllMSNs();
+      setMsns(data);
+    } catch (error) {
+      console.error('Failed to load data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const getDeptProgress = (unit: MSNUnit, dept: Department) => {
     const schedule = unit.deptSchedules[dept];
@@ -195,33 +211,44 @@ export default function App() {
   const readyUnitsCount = useMemo(() => msns.filter(m => isMsnReady(m) && !m.shipped).length, [msns, isMsnReady]);
   const archivedUnitsCount = useMemo(() => msns.filter(m => m.shipped).length, [msns]);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(msns));
-  }, [msns]);
-
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (msnToDelete) {
-      setMsns(prev => prev.filter(m => m.id !== msnToDelete));
-      if (selectedId === msnToDelete) {
-        setView('dashboard');
-        setSelectedId(null);
+      try {
+        await databaseService.deleteMSN(msnToDelete);
+        setMsns(prev => prev.filter(m => m.id !== msnToDelete));
+        if (selectedId === msnToDelete) {
+          setView('dashboard');
+          setSelectedId(null);
+        }
+        setMsnToDelete(null);
+      } catch (error) {
+        console.error('Error deleting MSN:', error);
       }
-      setMsnToDelete(null);
     }
   };
 
-  const confirmShip = () => {
+  const confirmShip = async () => {
     if (msnToShip) {
-      setMsns(prev => prev.map(m => m.id === msnToShip ? { ...m, shipped: true, shippedAt: new Date().toLocaleString() } : m));
-      setMsnToShip(null);
+      try {
+        const updated = await databaseService.shipMSN(msnToShip);
+        setMsns(prev => prev.map(m => m.id === msnToShip ? updated : m));
+        setMsnToShip(null);
+      } catch (error) {
+        console.error('Error shipping MSN:', error);
+      }
     }
   };
 
-  const unshipMsn = (id: string) => {
-    setMsns(prev => prev.map(m => m.id === id ? { ...m, shipped: false, shippedAt: undefined } : m));
+  const unshipMsn = async (id: string) => {
+    try {
+      const updated = await databaseService.unshipMSN(id);
+      setMsns(prev => prev.map(m => m.id === id ? updated : m));
+    } catch (error) {
+      console.error('Error unshipping MSN:', error);
+    }
   };
 
-  const handleManualAdd = () => {
+  const handleManualAdd = async () => {
     if (!manualMsn) return;
     const existing = msns.find(m => m.msn === manualMsn);
     if (existing) {
@@ -235,8 +262,7 @@ export default function App() {
       return;
     }
 
-    const newUnit: MSNUnit = {
-      id: Math.random().toString(36).substr(2, 9),
+    const newUnit: Omit<MSNUnit, 'id'> = {
       msn: manualMsn,
       partNumber: 'A321-NOLA',
       startDate: manualStartDate,
@@ -248,17 +274,33 @@ export default function App() {
       discrepancies: [],
       shipped: false
     };
-    setMsns(prev => [...prev, newUnit]);
-    setShowImport(false);
-    setManualMsn('');
-  };
 
-  const confirmManualOverwrite = () => {
-    if (msnToOverwriteManual) {
-      setMsns(prev => prev.map(m => m.msn === msnToOverwriteManual.msn ? { ...m, ...msnToOverwriteManual } : m));
-      setMsnToOverwriteManual(null);
+    try {
+      const created = await databaseService.createMSN(newUnit);
+      setMsns(prev => [...prev, created]);
       setShowImport(false);
       setManualMsn('');
+    } catch (error) {
+      console.error('Error creating MSN:', error);
+    }
+  };
+
+  const confirmManualOverwrite = async () => {
+    if (msnToOverwriteManual) {
+      try {
+        const updated = await databaseService.updateMSN(msnToOverwriteManual.id, {
+          startDate: manualStartDate,
+          endDate: manualEndDate,
+          wrappingDate: manualWrappingDate,
+          plannedShippingDate: manualShippingDate
+        });
+        setMsns(prev => prev.map(m => m.id === updated.id ? updated : m));
+        setMsnToOverwriteManual(null);
+        setShowImport(false);
+        setManualMsn('');
+      } catch (error) {
+        console.error('Error updating MSN:', error);
+      }
     }
   };
 
@@ -267,44 +309,69 @@ export default function App() {
     if (!file) return;
     setIsScanning(true);
     const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
-    
+
+    // Helper to process row data into partial MSNUnit
+    const processRowData = (msnStr: string, start: string, end: string, wrapping?: string, shipping?: string): Partial<MSNUnit> => {
+      const existing = msns.find(m => m.msn === msnStr);
+      if (existing) {
+        return {
+          ...existing,
+          startDate: start,
+          endDate: end,
+          wrappingDate: wrapping,
+          plannedShippingDate: shipping
+        };
+      } else {
+        return {
+          msn: msnStr,
+          partNumber: 'A321-NOLA',
+          startDate: start,
+          endDate: end,
+          wrappingDate: wrapping,
+          plannedShippingDate: shipping,
+          currentDepartment: Department.AUTOMATIZZATI,
+          deptSchedules: createMsnSchedules(start),
+          discrepancies: [],
+          shipped: false
+        };
+      }
+    };
+
     if (isExcel) {
       const reader = new FileReader();
-      reader.onload = (evt) => {
+      reader.onload = async (evt) => {
         try {
           const data = evt.target?.result;
           const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
           const sheetName = workbook.SheetNames[0];
           const sheet = workbook.Sheets[sheetName];
           const json = XLSX.utils.sheet_to_json(sheet) as any[];
-          
-          setMsns(prev => {
-            const updatedMsns = [...prev];
-            json.forEach(row => {
-              const msnStr = String(row.MSN || row.msn || '');
-              if (!msnStr) return;
-              const parseExcelDate = (val: any) => {
-                 if (val instanceof Date) return val.toISOString().split('T')[0];
-                 if (!val) return undefined;
-                 return String(val);
-              };
-              const start = parseExcelDate(row.Start || row.start) || new Date().toISOString().split('T')[0];
-              const end = parseExcelDate(row.Finish || row.finish || row.End || row.end) || addHours(start, 1200);
-              const wrapping = parseExcelDate(row.Wrapping || row.wrapping);
-              const shipping = parseExcelDate(row.Shipping || row.shipping || row.FoB || row.fob);
 
-              const existingIdx = updatedMsns.findIndex(m => m.msn === msnStr);
-              if (existingIdx !== -1) {
-                updatedMsns[existingIdx] = { ...updatedMsns[existingIdx], startDate: start, endDate: end, wrappingDate: wrapping, plannedShippingDate: shipping };
-              } else {
-                updatedMsns.push({ id: Math.random().toString(36).substr(2, 9), msn: msnStr, partNumber: 'A321-NOLA', startDate: start, endDate: end, wrappingDate: wrapping, plannedShippingDate: shipping, currentDepartment: Department.AUTOMATIZZATI, deptSchedules: createMsnSchedules(start), discrepancies: [], shipped: false });
-              }
-            });
-            return updatedMsns;
+          const msnsToUpsert: Partial<MSNUnit>[] = [];
+
+          json.forEach(row => {
+            const msnStr = String(row.MSN || row.msn || '');
+            if (!msnStr) return;
+            const parseExcelDate = (val: any) => {
+              if (val instanceof Date) return val.toISOString().split('T')[0];
+              if (!val) return undefined;
+              return String(val);
+            };
+            const start = parseExcelDate(row.Start || row.start) || new Date().toISOString().split('T')[0];
+            const end = parseExcelDate(row.Finish || row.finish || row.End || row.end) || addHours(start, 1200);
+            const wrapping = parseExcelDate(row.Wrapping || row.wrapping);
+            const shipping = parseExcelDate(row.Shipping || row.shipping || row.FoB || row.fob);
+
+            msnsToUpsert.push(processRowData(msnStr, start, end, wrapping, shipping));
           });
+
+          await databaseService.upsertMSNs(msnsToUpsert);
+          await loadData(); // Reload to get fresh data with IDs
+
           setIsScanning(false);
           setShowImport(false);
         } catch (err) {
+          console.error("Excel import error:", err);
           setIsScanning(false);
         }
       };
@@ -314,63 +381,105 @@ export default function App() {
 
     const reader = new FileReader();
     reader.onload = async (evt) => {
-      const b64 = (reader.result as string).split(',')[1];
-      const units = await parseMsnDocument(b64, file.type);
-      if (units) {
-        setMsns(prev => {
-          const updatedMsns = [...prev];
-          units.forEach((u: any) => {
-            const existingIdx = updatedMsns.findIndex(m => m.msn === u.msn);
-            if (existingIdx !== -1) {
-              updatedMsns[existingIdx] = { ...updatedMsns[existingIdx], startDate: u.startDate, endDate: u.endDate, wrappingDate: u.wrappingDate, plannedShippingDate: u.shippingDate };
-            } else {
-              updatedMsns.push({ id: Math.random().toString(36).substr(2, 9), msn: u.msn, partNumber: 'A321-NOLA', startDate: u.startDate, endDate: u.endDate, wrappingDate: u.wrappingDate, plannedShippingDate: u.shippingDate, currentDepartment: Department.AUTOMATIZZATI, deptSchedules: createMsnSchedules(u.startDate), discrepancies: [], shipped: false });
-            }
-          });
-          return updatedMsns;
-        });
+      try {
+        const b64 = (reader.result as string).split(',')[1];
+        const units = await parseMsnDocument(b64, file.type);
+        if (units) {
+          const msnsToUpsert: Partial<MSNUnit>[] = units.map((u: any) =>
+            processRowData(u.msn, u.startDate, u.endDate, u.wrappingDate, u.shippingDate)
+          );
+
+          await databaseService.upsertMSNs(msnsToUpsert);
+          await loadData();
+        }
+      } catch (err) {
+        console.error("File import error:", err);
+      } finally {
+        setIsScanning(false);
+        setShowImport(false);
       }
-      setIsScanning(false);
-      setShowImport(false);
     };
     reader.readAsDataURL(file);
   };
 
-  const toggleOp = (msnId: string, dept: Department, opId: string) => {
-    setMsns(prev => prev.map(m => m.id !== msnId ? m : {
-      ...m,
-      deptSchedules: {
-        ...m.deptSchedules,
-        [dept]: {
-          ...m.deptSchedules[dept],
-          operations: m.deptSchedules[dept].operations.map(o => o.id === opId ? { ...o, isCompleted: !o.isCompleted } : o)
-        }
-      }
-    }));
+  const toggleOp = async (msnId: string, dept: Department, opId: string) => {
+    const msn = msns.find(m => m.id === msnId);
+    if (!msn) return;
+
+    const newDeptSchedule = {
+      ...msn.deptSchedules[dept],
+      operations: msn.deptSchedules[dept].operations.map(o => o.id === opId ? { ...o, isCompleted: !o.isCompleted } : o)
+    };
+
+    const newSchedules = {
+      ...msn.deptSchedules,
+      [dept]: newDeptSchedule
+    };
+
+    // Optimistic update
+    setMsns(prev => prev.map(m => m.id !== msnId ? m : { ...m, deptSchedules: newSchedules }));
+
+    try {
+      await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
+    } catch (e) {
+      console.error("Failed to update op", e);
+      // Revert or reload could go here
+      loadData();
+    }
   };
 
-  const updateDeptQualityStatus = (msnId: string, dept: Department, status: 'OK' | 'KO') => {
-    setMsns(prev => prev.map(m => m.id !== msnId ? m : {
-      ...m,
-      deptSchedules: {
-        ...m.deptSchedules,
-        [dept]: {
-          ...m.deptSchedules[dept],
-          qualityStatus: status
-        }
-      }
-    }));
+  const updateDeptQualityStatus = async (msnId: string, dept: Department, status: 'OK' | 'KO') => {
+    const msn = msns.find(m => m.id === msnId);
+    if (!msn) return;
+
+    const newDeptSchedule = {
+      ...msn.deptSchedules[dept],
+      qualityStatus: status
+    };
+
+    const newSchedules = {
+      ...msn.deptSchedules,
+      [dept]: newDeptSchedule
+    };
+
+    setMsns(prev => prev.map(m => m.id !== msnId ? m : { ...m, deptSchedules: newSchedules }));
+
+    try {
+      await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
+    } catch (e) {
+      console.error("Failed to update quality", e);
+      loadData();
+    }
   };
 
-  const updateSkinPhase = (msnId: string, skinType: SkinType, phase: keyof SkinWork['phases'], updates: any) => {
-    setMsns(prev => prev.map(m => {
-      if (m.id !== msnId) return m;
-      const skins = m.deptSchedules[Department.AUTOMATIZZATI].skins?.map(s => {
-        if (s.type !== skinType) return s;
-        return { ...s, phases: { ...s.phases, [phase]: { ...s.phases[phase], ...updates } } };
-      });
-      return { ...m, deptSchedules: { ...m.deptSchedules, [Department.AUTOMATIZZATI]: { ...m.deptSchedules[Department.AUTOMATIZZATI], skins } } };
-    }));
+  const updateSkinPhase = async (msnId: string, skinType: SkinType, phase: keyof SkinWork['phases'], updates: any) => {
+    const msn = msns.find(m => m.id === msnId);
+    if (!msn) return;
+
+    // Deep clone/modify
+    const skins = msn.deptSchedules[Department.AUTOMATIZZATI].skins?.map(s => {
+      if (s.type !== skinType) return s;
+      return { ...s, phases: { ...s.phases, [phase]: { ...s.phases[phase], ...updates } } };
+    });
+
+    const newDeptSchedule = {
+      ...msn.deptSchedules[Department.AUTOMATIZZATI],
+      skins
+    };
+
+    const newSchedules = {
+      ...msn.deptSchedules,
+      [Department.AUTOMATIZZATI]: newDeptSchedule
+    };
+
+    setMsns(prev => prev.map(m => m.id !== msnId ? m : { ...m, deptSchedules: newSchedules }));
+
+    try {
+      await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
+    } catch (e) {
+      console.error("Failed to update skin", e);
+      loadData();
+    }
   };
 
   const ProgressBar = ({ label, progress, isKO }: { label: string, progress: number, isKO?: boolean }) => (
@@ -388,6 +497,17 @@ export default function App() {
     </div>
   );
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-indigo-400 font-black uppercase tracking-widest text-xs animate-pulse">Caricamento Dati...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30">
       <header className="h-20 bg-slate-900/50 backdrop-blur-xl border-b border-slate-800 px-8 flex justify-between items-center sticky top-0 z-50">
@@ -399,8 +519,8 @@ export default function App() {
           </div>
         </div>
         <div className="flex gap-4">
-          <button 
-            onClick={() => setView('shipments')} 
+          <button
+            onClick={() => setView('shipments')}
             className={`relative px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${view === 'shipments' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
           >
             Spedizioni
@@ -422,19 +542,19 @@ export default function App() {
                 <h2 className="text-5xl md:text-6xl font-black italic tracking-tighter leading-none text-white">Line Status</h2>
                 <div className="hidden md:flex items-center gap-3 px-5 py-2 bg-slate-900 rounded-2xl border-2 border-indigo-500 shadow-[0_0_15px_rgba(79,70,229,0.3)]">
                   <span className="text-3xl font-black text-indigo-400">{productionUnitsCount}</span>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-tight">In<br/>Production</span>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-tight">In<br />Production</span>
                 </div>
               </div>
               <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
                 <div className="relative w-full md:w-64">
-                  <input 
-                    type="text" 
-                    placeholder="Cerca MSN..." 
-                    value={searchTerm} 
+                  <input
+                    type="text"
+                    placeholder="Cerca MSN..."
+                    value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-xs font-bold text-white focus:outline-none focus:border-indigo-500 transition-colors"
                   />
-                  <svg className="w-4 h-4 text-slate-500 absolute right-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <svg className="w-4 h-4 text-slate-500 absolute right-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 </div>
                 <div className="flex items-center gap-3 text-green-500 bg-green-500/10 px-4 py-2 rounded-full border border-green-500/20 whitespace-nowrap">
                   <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
@@ -446,12 +566,12 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
               {dashboardMsns.map(u => (
                 <div key={u.id} onClick={() => { setSelectedId(u.id); setView('unit'); }} className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] hover:border-indigo-500/50 transition-all group cursor-pointer shadow-2xl relative">
-                  <button 
+                  <button
                     onClick={(e) => { e.stopPropagation(); setMsnToDelete(u.id); }}
                     className="absolute top-6 right-6 z-10 p-2.5 bg-slate-950/50 rounded-xl text-slate-500 hover:text-red-500 hover:bg-red-500/10 transition-all opacity-0 group-hover:opacity-100 border border-transparent hover:border-red-500/20"
                     title="Elimina MSN"
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </button>
                   <div className="flex justify-between items-start mb-6 pr-12">
                     <div>
@@ -480,23 +600,23 @@ export default function App() {
           <div className="max-w-7xl mx-auto space-y-12 animate-in fade-in duration-500">
             <div className="flex flex-col md:flex-row justify-between items-center gap-8">
               <div className="flex items-center gap-6">
-                <button onClick={() => setView('dashboard')} className="p-4 bg-slate-900 rounded-2xl border border-slate-800 hover:text-white transition-colors"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="3"/></svg></button>
+                <button onClick={() => setView('dashboard')} className="p-4 bg-slate-900 rounded-2xl border border-slate-800 hover:text-white transition-colors"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="3" /></svg></button>
                 <h2 className="text-5xl font-black italic tracking-tighter leading-none text-white">Log Spedizioni</h2>
               </div>
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-3 px-5 py-2 bg-slate-900 rounded-2xl border-2 border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.2)]">
                   <span className="text-2xl font-black text-green-500">{readyUnitsCount}</span>
-                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-tight">Ready<br/>to ship</span>
+                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-tight">Ready<br />to ship</span>
                 </div>
                 <div className="flex items-center gap-3 px-5 py-2 bg-slate-900 rounded-2xl border border-slate-800">
                   <span className="text-2xl font-black text-slate-400">{archivedUnitsCount}</span>
-                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-tight">Archived<br/>Units</span>
+                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-tight">Archived<br />Units</span>
                 </div>
                 <div className="relative w-full md:w-64">
-                  <input 
-                    type="text" 
-                    placeholder="Cerca MSN..." 
-                    value={shipSearchTerm} 
+                  <input
+                    type="text"
+                    placeholder="Cerca MSN..."
+                    value={shipSearchTerm}
                     onChange={(e) => setShipSearchTerm(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-xs font-bold text-white focus:outline-none focus:border-indigo-500 transition-colors"
                   />
@@ -506,9 +626,16 @@ export default function App() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
               {readyMsns.map(u => (
-                <div key={u.id} className="bg-slate-900 border border-green-500/30 p-8 rounded-[2.5rem] shadow-2xl relative flex flex-col justify-between min-h-[300px]">
+                <div key={u.id} className="bg-slate-900 border border-green-500/30 p-8 rounded-[2.5rem] shadow-2xl relative flex flex-col justify-between min-h-[300px] group">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMsnToDelete(u.id); }}
+                    className="absolute top-6 right-6 z-10 p-2.5 bg-slate-950/50 rounded-xl text-slate-500 hover:text-red-500 hover:bg-red-500/10 transition-all opacity-0 group-hover:opacity-100 border border-transparent hover:border-red-500/20"
+                    title="Elimina MSN"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </button>
                   <div>
-                    <div className="flex justify-between items-start mb-6">
+                    <div className="flex justify-between items-start mb-6 pr-12">
                       <div>
                         <span className="text-4xl font-black italic text-white">{u.msn}</span>
                         <p className="text-[9px] font-bold text-slate-500 uppercase mt-1">A321-NOLA</p>
@@ -516,11 +643,11 @@ export default function App() {
                       <div className="bg-green-500 text-slate-950 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg shadow-green-500/20">Ready</div>
                     </div>
                     <div className="bg-slate-950/50 p-6 rounded-3xl space-y-4 border border-slate-800">
-                       <div className="flex justify-between text-[10px] font-bold"><span className="text-slate-500 uppercase">Qualità</span><span className="text-green-500">100% OK</span></div>
-                       <div className="flex justify-between text-[10px] font-bold"><span className="text-slate-500 uppercase">Wrapping</span><span className="text-green-500">ESEGUITO</span></div>
+                      <div className="flex justify-between text-[10px] font-bold"><span className="text-slate-500 uppercase">Qualità</span><span className="text-green-500">100% OK</span></div>
+                      <div className="flex justify-between text-[10px] font-bold"><span className="text-slate-500 uppercase">Wrapping</span><span className="text-green-500">ESEGUITO</span></div>
                     </div>
                   </div>
-                  <button 
+                  <button
                     onClick={() => setMsnToShip(u.id)}
                     className="mt-8 w-full py-5 bg-green-600 hover:bg-green-500 text-white rounded-3xl font-black uppercase tracking-[0.2em] text-[10px] transition-all shadow-xl shadow-green-600/10 active:scale-95"
                   >
@@ -528,11 +655,18 @@ export default function App() {
                   </button>
                 </div>
               ))}
-              
+
               {shippedMsns.map(u => (
-                <div key={u.id} className="bg-slate-900/50 border border-slate-800 p-8 rounded-[2.5rem] relative flex flex-col justify-between min-h-[300px]">
+                <div key={u.id} className="bg-slate-900/50 border border-slate-800 p-8 rounded-[2.5rem] relative flex flex-col justify-between min-h-[300px] group">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMsnToDelete(u.id); }}
+                    className="absolute top-6 right-6 z-10 p-2.5 bg-slate-950/50 rounded-xl text-slate-500 hover:text-red-500 hover:bg-red-500/10 transition-all opacity-0 group-hover:opacity-100 border border-transparent hover:border-red-500/20"
+                    title="Elimina MSN"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </button>
                   <div>
-                    <div className="flex justify-between items-start mb-6">
+                    <div className="flex justify-between items-start mb-6 pr-12">
                       <div>
                         <span className="text-4xl font-black italic text-slate-400">{u.msn}</span>
                         <p className="text-[9px] font-bold text-slate-600 uppercase mt-1">A321-NOLA</p>
@@ -545,7 +679,7 @@ export default function App() {
                     </div>
                   </div>
                   <div className="flex flex-col gap-3 mt-8">
-                    <button 
+                    <button
                       onClick={() => unshipMsn(u.id)}
                       className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-indigo-400/20 rounded-2xl font-black uppercase text-[9px] tracking-widest transition-all"
                     >
@@ -555,7 +689,7 @@ export default function App() {
                   </div>
                 </div>
               ))}
-              
+
               {readyMsns.length === 0 && shippedMsns.length === 0 && (
                 <div className="col-span-full py-20 text-center border-2 border-dashed border-slate-800 rounded-[3rem]">
                   <p className="text-slate-500 font-black uppercase tracking-widest">Nessuna unità pronta o spedita</p>
@@ -567,7 +701,7 @@ export default function App() {
           <div className="max-w-5xl mx-auto space-y-12 animate-in fade-in slide-in-from-bottom duration-500">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-6">
-                <button onClick={() => setView('dashboard')} className="p-4 bg-slate-900 rounded-2xl text-slate-400 hover:text-white transition-colors border border-slate-800"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="3"/></svg></button>
+                <button onClick={() => setView('dashboard')} className="p-4 bg-slate-900 rounded-2xl text-slate-400 hover:text-white transition-colors border border-slate-800"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="3" /></svg></button>
                 <div>
                   <h3 className="text-4xl font-black italic text-white tracking-tighter">Gestione MSN {selectedMsn.msn}</h3>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Avanzamento flussi industriali</p>
@@ -584,7 +718,7 @@ export default function App() {
                 } else {
                   isKO = selectedMsn.deptSchedules[dept].qualityStatus === 'KO';
                 }
-                
+
                 return (
                   <button key={dept} onClick={() => { setActiveDept(dept); setView('dept-flow'); setActiveSkin(null); }} className={`p-10 rounded-[2.5rem] border-2 transition-all flex flex-col items-center gap-6 shadow-xl ${isKO ? 'bg-red-500/10 border-red-500/50 hover:border-red-500' : p === 100 ? 'bg-green-500/10 border-green-500/50' : 'bg-slate-900 border-slate-800 hover:border-indigo-500'}`}>
                     <div className={`w-16 h-16 rounded-full flex items-center justify-center font-black text-lg ${isKO ? 'bg-red-500 text-white' : p === 100 ? 'bg-green-500 text-slate-950' : 'bg-slate-800 text-indigo-400'}`}>{p}%</div>
@@ -609,7 +743,7 @@ export default function App() {
         ) : view === 'dept-flow' && selectedMsn && activeDept ? (
           <div className="max-w-3xl mx-auto space-y-10 animate-in fade-in duration-300">
             <div className="flex items-center gap-6">
-              <button onClick={() => setView('unit')} className="p-4 bg-slate-900 rounded-2xl border border-slate-800"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="3"/></svg></button>
+              <button onClick={() => setView('unit')} className="p-4 bg-slate-900 rounded-2xl border border-slate-800"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="3" /></svg></button>
               <div>
                 <h3 className="text-3xl font-black italic text-white tracking-tighter">Reparto {activeDept}</h3>
                 <div className="flex gap-4 mt-2">
@@ -624,14 +758,14 @@ export default function App() {
                 {!activeSkin ? (
                   <div className="grid grid-cols-1 gap-4">
                     {selectedMsn.deptSchedules[Department.AUTOMATIZZATI].skins?.map(skin => {
-                      const sp = (skin.phases.Masticiatura.isCompleted?30:0)+(skin.phases.Macchina.isCompleted?30:0)+(skin.phases.Completamento.isCompleted?30:0)+(skin.phases['Quality Gate'].isCompleted?10:0);
+                      const sp = (skin.phases.Masticiatura.isCompleted ? 30 : 0) + (skin.phases.Macchina.isCompleted ? 30 : 0) + (skin.phases.Completamento.isCompleted ? 30 : 0) + (skin.phases['Quality Gate'].isCompleted ? 10 : 0);
                       const skinKO = skin.phases['Quality Gate'].status === 'KO' && skin.phases['Quality Gate'].isCompleted;
                       return (
                         <button key={skin.type} onClick={() => setActiveSkin(skin.type)} className={`bg-slate-900 p-8 rounded-3xl border ${skinKO ? 'border-red-500' : 'border-slate-800'} flex justify-between items-center hover:border-indigo-500 transition-all group`}>
                           <div className="flex items-center gap-4">
                             {skinKO && (
                               <div className="p-2 bg-red-500 rounded-xl text-white">
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                               </div>
                             )}
                             <span className={`text-lg font-black uppercase tracking-tight transition-colors ${skinKO ? 'text-red-500' : 'text-white group-hover:text-indigo-400'}`}>{SKIN_LABELS[skin.type]} {skinKO && '(QUALITY KO)'}</span>
@@ -641,7 +775,7 @@ export default function App() {
                               <div className={`h-full ${skinKO ? 'bg-red-500' : 'bg-indigo-500'}`} style={{ width: `${sp}%` }}></div>
                             </div>
                             <span className="text-[10px] font-black text-slate-500">{sp}%</span>
-                            <svg className="w-6 h-6 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" strokeWidth="4"/></svg>
+                            <svg className="w-6 h-6 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" strokeWidth="4" /></svg>
                           </div>
                         </button>
                       );
@@ -693,7 +827,7 @@ export default function App() {
                 <div className="bg-slate-900 p-10 rounded-[3rem] border border-slate-800 space-y-8">
                   {selectedMsn.deptSchedules[activeDept].operations.map((op, idx) => (
                     <div key={op.id} onClick={() => toggleOp(selectedMsn.id, activeDept, op.id)} className={`flex items-center gap-6 p-8 rounded-3xl border-2 transition-all cursor-pointer ${op.isCompleted ? 'bg-green-500/10 border-green-500/50' : 'bg-slate-950 border-slate-800 hover:border-indigo-500/30'}`}>
-                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border-2 ${op.isCompleted ? 'bg-green-500 border-green-500 text-slate-950' : 'border-slate-800 text-slate-600'}`}>{op.isCompleted && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth="4"/></svg>}</div>
+                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border-2 ${op.isCompleted ? 'bg-green-500 border-green-500 text-slate-950' : 'border-slate-800 text-slate-600'}`}>{op.isCompleted && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth="4" /></svg>}</div>
                       <span className={`text-sm font-black uppercase tracking-widest ${op.isCompleted ? 'text-slate-400 line-through' : 'text-white'}`}>{idx + 1}. {op.name}</span>
                     </div>
                   ))}
@@ -724,11 +858,11 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-8 animate-in fade-in zoom-in duration-200">
           <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 shadow-2xl p-10 text-center space-y-8">
             <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto">
-              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </div>
             <div>
               <h3 className="text-2xl font-black italic text-white tracking-tighter uppercase">Conferma Eliminazione</h3>
-              <p className="text-sm text-slate-400 font-medium mt-2 leading-relaxed">Sei sicuro di voler eliminare la MSN <span className="text-white font-bold">{msns.find(m => m.id === msnToDelete)?.msn}</span>? <br/> Questa operazione non può essere annullata.</p>
+              <p className="text-sm text-slate-400 font-medium mt-2 leading-relaxed">Sei sicuro di voler eliminare la MSN <span className="text-white font-bold">{msns.find(m => m.id === msnToDelete)?.msn}</span>? <br /> Questa operazione non può essere annullata.</p>
             </div>
             <div className="flex flex-col sm:flex-row gap-4 pt-2">
               <button onClick={() => setMsnToDelete(null)} className="flex-1 py-4 bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-700 transition-colors">Annulla</button>
@@ -742,7 +876,7 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-8 animate-in fade-in zoom-in duration-200">
           <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 shadow-2xl p-10 text-center space-y-8">
             <div className="w-20 h-20 bg-green-500/10 text-green-500 rounded-full flex items-center justify-center mx-auto">
-              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </div>
             <div>
               <h3 className="text-2xl font-black italic text-white tracking-tighter uppercase">Conferma Spedizione</h3>
@@ -762,10 +896,10 @@ export default function App() {
             <div className="flex justify-between items-center">
               <h3 className="text-3xl font-black italic text-white tracking-tighter">Gestione MSN</h3>
               <button onClick={() => setShowImport(false)} className="text-slate-500 hover:text-white transition-colors">
-                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth="2"/></svg>
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth="2" /></svg>
               </button>
             </div>
-            
+
             <div className="flex bg-slate-950 p-2 rounded-2xl border border-slate-800">
               <button onClick={() => setImportMode('file')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${importMode === 'file' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>File (AI/Excel)</button>
               <button onClick={() => setImportMode('manual')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${importMode === 'manual' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Manuale</button>
@@ -780,7 +914,7 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <svg className="w-16 h-16 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" strokeWidth="1.5"/></svg>
+                    <svg className="w-16 h-16 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" strokeWidth="1.5" /></svg>
                     <div className="text-center">
                       <p className="text-xs font-black uppercase text-slate-300 tracking-widest">Trascina Immagine, PDF o Excel</p>
                       <p className="text-[9px] font-bold text-slate-500 uppercase mt-2 tracking-widest">Supporta analisi AI e Parsing Excel</p>
