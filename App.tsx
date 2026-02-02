@@ -486,13 +486,16 @@ export default function App() {
     if (!msn) return;
 
     // Deep clone/modify
-    const skins = msn.deptSchedules[Department.AUTOMATIZZATI].skins?.map(s => {
+    const schedule = msn.deptSchedules?.[Department.AUTOMATIZZATI];
+    if (!schedule?.skins) return;
+
+    const skins = schedule.skins.map(s => {
       if (s.type !== skinType) return s;
       return { ...s, phases: { ...s.phases, [phase]: { ...s.phases[phase], ...updates } } };
     });
 
     const newDeptSchedule = {
-      ...msn.deptSchedules[Department.AUTOMATIZZATI],
+      ...schedule,
       skins
     };
 
@@ -610,10 +613,10 @@ export default function App() {
                     <div className="bg-slate-800 text-slate-400 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border border-slate-700">Production</div>
                   </div>
                   <div className="space-y-4">
-                    <ProgressBar label="Automatizzati" progress={getDeptProgress(u, Department.AUTOMATIZZATI)} isKO={u.deptSchedules[Department.AUTOMATIZZATI].skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO')} />
-                    <ProgressBar label="Pannelli" progress={getDeptProgress(u, Department.PANNELLI)} isKO={u.deptSchedules[Department.PANNELLI].qualityStatus === 'KO'} />
-                    <ProgressBar label="Top" progress={getDeptProgress(u, Department.TOP)} isKO={u.deptSchedules[Department.TOP].qualityStatus === 'KO'} />
-                    <ProgressBar label="Finale" progress={getDeptProgress(u, Department.FINALE)} isKO={u.deptSchedules[Department.FINALE].qualityStatus === 'KO'} />
+                    <ProgressBar label="Automatizzati" progress={getDeptProgress(u, Department.AUTOMATIZZATI)} isKO={u.deptSchedules?.[Department.AUTOMATIZZATI]?.skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO') ?? false} />
+                    <ProgressBar label="Pannelli" progress={getDeptProgress(u, Department.PANNELLI)} isKO={u.deptSchedules?.[Department.PANNELLI]?.qualityStatus === 'KO'} />
+                    <ProgressBar label="Top" progress={getDeptProgress(u, Department.TOP)} isKO={u.deptSchedules?.[Department.TOP]?.qualityStatus === 'KO'} />
+                    <ProgressBar label="Finale" progress={getDeptProgress(u, Department.FINALE)} isKO={u.deptSchedules?.[Department.FINALE]?.qualityStatus === 'KO'} />
                     <ProgressBar label="Imballaggio" progress={getDeptProgress(u, Department.IMBALLAGGIO)} />
                   </div>
                 </div>
@@ -743,9 +746,9 @@ export default function App() {
                 const p = getDeptProgress(selectedMsn, dept);
                 let isKO = false;
                 if (dept === Department.AUTOMATIZZATI) {
-                  isKO = selectedMsn.deptSchedules[Department.AUTOMATIZZATI].skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO') || false;
+                  isKO = selectedMsn.deptSchedules?.[Department.AUTOMATIZZATI]?.skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO') || false;
                 } else {
-                  isKO = selectedMsn.deptSchedules[dept].qualityStatus === 'KO';
+                  isKO = selectedMsn.deptSchedules?.[dept]?.qualityStatus === 'KO';
                 }
 
                 return (
@@ -776,8 +779,8 @@ export default function App() {
               <div>
                 <h3 className="text-3xl font-black italic text-white tracking-tighter">Reparto {activeDept}</h3>
                 <div className="flex gap-4 mt-2">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase">Inizio: {selectedMsn.deptSchedules[activeDept].startDate}</span>
-                  <span className="text-[10px] font-bold text-indigo-400 uppercase">Fine: {selectedMsn.deptSchedules[activeDept].endDate}</span>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Inizio: {selectedMsn.deptSchedules?.[activeDept]?.startDate}</span>
+                  <span className="text-[10px] font-bold text-indigo-400 uppercase">Fine: {selectedMsn.deptSchedules?.[activeDept]?.endDate}</span>
                 </div>
               </div>
             </div>
@@ -786,7 +789,7 @@ export default function App() {
               <div className="space-y-6">
                 {!activeSkin ? (
                   <div className="grid grid-cols-1 gap-4">
-                    {selectedMsn.deptSchedules[Department.AUTOMATIZZATI].skins?.map(skin => {
+                    {selectedMsn.deptSchedules?.[Department.AUTOMATIZZATI]?.skins?.map(skin => {
                       const sp = (skin.phases.Masticiatura.isCompleted ? 30 : 0) + (skin.phases.Macchina.isCompleted ? 30 : 0) + (skin.phases.Completamento.isCompleted ? 30 : 0) + (skin.phases['Quality Gate'].isCompleted ? 10 : 0);
                       const skinKO = skin.phases['Quality Gate'].status === 'KO' && skin.phases['Quality Gate'].isCompleted;
                       return (
