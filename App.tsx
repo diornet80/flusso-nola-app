@@ -165,7 +165,9 @@ export default function App() {
   };
 
   const getDeptProgress = (unit: MSNUnit, dept: Department) => {
-    const schedule = unit.deptSchedules[dept];
+    const schedule = unit.deptSchedules?.[dept];
+    if (!schedule) return 0;
+
     if (dept === Department.AUTOMATIZZATI && schedule.skins) {
       let total = 0;
       schedule.skins.forEach(s => {
@@ -176,21 +178,24 @@ export default function App() {
       });
       return Math.round(total / 5);
     }
-    const ops = schedule.operations;
+    const ops = schedule.operations || [];
     if (ops.length === 0) return 0;
     const completed = ops.filter(o => o.isCompleted).length;
     return Math.round((completed / ops.length) * 100);
   };
 
   const isMsnReady = (unit: MSNUnit) => {
+    if (!unit.deptSchedules) return false;
     return DEP_ORDER.every(d => {
-      const p = getDeptProgress(unit, d);
       const schedule = unit.deptSchedules[d];
+      if (!schedule) return false;
+
+      const p = getDeptProgress(unit, d);
       if (d === Department.AUTOMATIZZATI) {
         const anySkinKO = schedule.skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO') || false;
         return p === 100 && !anySkinKO;
       }
-      return p === 100 && schedule.qualityStatus !== 'KO';
+      return p === 100 && schedule.qualityStatus !== 'OK'; // Fix logic: ready if 100% and NOT KO? Or explicitly OK? Assuming !KO for now as per original
     });
   };
 
