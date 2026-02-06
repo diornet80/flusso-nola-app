@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import { Department, MSNUnit, Operation, DeptSchedule, SkinType, SkinWork, MachineAsset, Discrepancy, DiscrepancySeverity } from './types';
 import { parseMsnDocument } from './services/geminiService';
 import { databaseService } from './services/databaseService';
+import { ImportUpdatesModal } from './components/ImportUpdatesModal';
 
 const STORAGE_KEY = 'chicken-track-v2-data'; // DEPRECATED: Using Supabase
 
@@ -131,6 +132,7 @@ export default function App() {
   const [activeDept, setActiveDept] = useState<Department | null>(null);
   const [activeSkin, setActiveSkin] = useState<SkinType | null>(null);
   const [showImport, setShowImport] = useState(false);
+  const [showUpdateImport, setShowUpdateImport] = useState(false);
   const [importMode, setImportMode] = useState<'file' | 'manual'>('file');
 
   const [manualMsn, setManualMsn] = useState('');
@@ -444,14 +446,31 @@ export default function App() {
     const msn = msns.find(m => m.id === msnId);
     if (!msn) return;
 
-    const newDeptSchedule = {
-      ...msn.deptSchedules[dept],
-      operations: msn.deptSchedules[dept].operations.map(o => o.id === opId ? { ...o, isCompleted: !o.isCompleted } : o)
-    };
+    // Deep clone schedule to avoid mutation issues
+    const schedule = msn.deptSchedules?.[dept];
+    if (!schedule) return;
+
+    const newOps = schedule.operations.map(op => {
+      if (op.id !== opId) return op;
+
+      // Cycle: Todo -> Doing -> Done -> Todo
+      let newState: 'todo' | 'doing' | 'done' = 'doing';
+      let isCompleted = false;
+
+      if (op.state === 'doing') {
+        newState = 'done';
+        isCompleted = true;
+      } else if (op.isCompleted || op.state === 'done') { // Check isCompleted for backward compatibility
+        newState = 'todo';
+        isCompleted = false;
+      }
+
+      return { ...op, isCompleted, state: newState };
+    });
 
     const newSchedules = {
       ...msn.deptSchedules,
-      [dept]: newDeptSchedule
+      [dept]: { ...schedule, operations: newOps }
     };
 
     // Optimistic update
@@ -461,7 +480,6 @@ export default function App() {
       await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
     } catch (e) {
       console.error("Failed to update op", e);
-      // Revert or reload could go here
       loadData();
     }
   };
@@ -490,6 +508,56 @@ export default function App() {
     }
   };
 
+  const toggleMachine = async (msnId: string, skinType: SkinType, asset: MachineAsset) => {
+    const msn = msns.find(m => m.id === msnId);
+    if (!msn) return;
+
+    const schedule = msn.deptSchedules?.[Department.AUTOMATIZZATI];
+    if (!schedule?.skins) return;
+
+    const skins = schedule.skins.map(s => {
+      if (s.type !== skinType) return s;
+
+      const currentDetails = s.phases.Macchina.machineDetails || [];
+      const exists = currentDetails.some(d => d.asset === asset);
+
+      let newDetails;
+      if (exists) {
+        newDetails = currentDetails.filter(d => d.asset !== asset);
+      } else {
+        const currentTotal = currentDetails.reduce((sum, d) => sum + d.percentage, 0);
+        const remaining = Math.max(0, 100 - currentTotal);
+        newDetails = [...currentDetails, { asset, percentage: remaining }];
+      }
+
+      const isCompleted = newDetails.length > 0;
+
+      return {
+        ...s,
+        phases: {
+          ...s.phases,
+          Macchina: {
+            ...s.phases.Macchina,
+            isCompleted,
+            machineDetails: newDetails
+          }
+        }
+      };
+    });
+
+    const newDeptSchedule = { ...schedule, skins };
+    const newSchedules = { ...msn.deptSchedules, [Department.AUTOMATIZZATI]: newDeptSchedule };
+
+    setMsns(prev => prev.map(m => m.id !== msnId ? m : { ...m, deptSchedules: newSchedules }));
+
+    try {
+      await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
+    } catch (e) {
+      console.error("Failed to update machine", e);
+      loadData();
+    }
+  };
+
   const updateSkinPhase = async (msnId: string, skinType: SkinType, phase: keyof SkinWork['phases'], updates: any) => {
     const msn = msns.find(m => m.id === msnId);
     if (!msn) return;
@@ -500,8 +568,20 @@ export default function App() {
 
     const skins = schedule.skins.map(s => {
       if (s.type !== skinType) return s;
+
+      // Manual click cycle logic for non-machine phases
+      // If we are just toggling completion (the UI calls this with specific updates usually, but we need to check if we should intercept)
+
+      // The current UI passing `{ isCompleted: !isCompleted }` usually.
+      // We want to change that call site OR handle logic here.
+      // Let's rely on the UI calling with explicit values OR we just look at what's passed.
+      // Actually, simplest is to update the calling code in rendering to call this with the right next state.
+      // But let's assume `updates` contains the raw properties we want to set.
+
       return { ...s, phases: { ...s.phases, [phase]: { ...s.phases[phase], ...updates } } };
     });
+
+    // ... rest of function ...
 
     const newDeptSchedule = {
       ...schedule,
@@ -519,6 +599,56 @@ export default function App() {
       await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
     } catch (e) {
       console.error("Failed to update skin", e);
+      loadData();
+    }
+  };
+
+  const updateMachinePercentage = async (msnId: string, skinType: SkinType, asset: MachineAsset, percentage: number) => {
+    if (percentage < 0) percentage = 0;
+    if (percentage > 100) percentage = 100;
+
+    const msn = msns.find(m => m.id === msnId);
+    if (!msn) return;
+
+    const schedule = msn.deptSchedules?.[Department.AUTOMATIZZATI];
+    if (!schedule?.skins) return;
+
+    // Validate Total <= 100%
+    const currentSkin = schedule.skins.find(s => s.type === skinType);
+    if (!currentSkin) return;
+
+    const otherDetails = currentSkin.phases.Macchina.machineDetails?.filter(d => d.asset !== asset) || [];
+    const currentTotal = otherDetails.reduce((sum, d) => sum + d.percentage, 0);
+
+    if (currentTotal + percentage > 100) {
+      alert(`Errore: La percentuale totale supererebbe il 100%. Disponibile: ${100 - currentTotal}%`);
+      return;
+    }
+
+    const skins = schedule.skins.map(s => {
+      if (s.type !== skinType) return s;
+
+      const currentDetails = s.phases.Macchina.machineDetails || [];
+      const updatedDetails = currentDetails.map(d => d.asset === asset ? { ...d, percentage } : d);
+
+      return {
+        ...s,
+        phases: {
+          ...s.phases,
+          Macchina: { ...s.phases.Macchina, machineDetails: updatedDetails }
+        }
+      };
+    });
+
+    const newDeptSchedule = { ...schedule, skins };
+    const newSchedules = { ...msn.deptSchedules, [Department.AUTOMATIZZATI]: newDeptSchedule };
+
+    setMsns(prev => prev.map(m => m.id !== msnId ? m : { ...m, deptSchedules: newSchedules }));
+
+    try {
+      await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
+    } catch (e) {
+      console.error("Failed to update percentage", e);
       loadData();
     }
   };
@@ -571,6 +701,7 @@ export default function App() {
               </span>
             )}
           </button>
+          <button onClick={() => setShowUpdateImport(true)} className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all text-white shadow-lg shadow-indigo-600/20">Aggiorna Reparti</button>
           <button onClick={() => { setShowImport(true); setImportMode('file'); }} className="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all">Importa MSN</button>
         </div>
       </header>
@@ -832,18 +963,76 @@ export default function App() {
                       const skin = selectedMsn.deptSchedules[Department.AUTOMATIZZATI].skins?.find(s => s.type === activeSkin)!;
                       return (
                         <div className="space-y-6">
-                          <div onClick={() => updateSkinPhase(selectedMsn.id, activeSkin, 'Masticiatura', { isCompleted: !skin.phases.Masticiatura.isCompleted })} className={`p-8 rounded-2xl border-2 transition-all cursor-pointer ${skin.phases.Masticiatura.isCompleted ? 'bg-green-500/10 border-green-500' : 'bg-slate-950 border-slate-800'}`}>
-                            <div className="flex justify-between"><span className="text-xs font-black uppercase tracking-widest">1. Masticiatura (30%)</span>{skin.phases.Masticiatura.isCompleted && <span className="text-[10px] font-black text-green-500">COMPLETATO</span>}</div>
+                          <div onClick={() => {
+                            const currentP = skin.phases.Masticiatura.progress ?? (skin.phases.Masticiatura.isCompleted ? 100 : 0);
+                            let newP = 0;
+                            if (currentP === 0) newP = 50; // In Progress
+                            else if (currentP < 100) newP = 100; // Done
+                            else newP = 0; // Reset
+                            updateSkinPhase(selectedMsn.id, activeSkin, 'Masticiatura', { isCompleted: newP === 100, progress: newP });
+                          }} className={`p-8 rounded-2xl border-2 transition-all cursor-pointer ${skin.phases.Masticiatura.isCompleted ? 'bg-green-500/10 border-green-500' : (skin.phases.Masticiatura.progress && skin.phases.Masticiatura.progress > 0) ? 'bg-orange-500/10 border-orange-500' : 'bg-slate-950 border-slate-800'}`}>
+                            <div className="flex justify-between">
+                              <span className="text-xs font-black uppercase tracking-widest">1. Masticiatura (30%)</span>
+                              {skin.phases.Masticiatura.isCompleted && <span className="text-[10px] font-black text-green-500">COMPLETATO</span>}
+                              {!skin.phases.Masticiatura.isCompleted && (skin.phases.Masticiatura.progress ?? 0) > 0 && <span className="text-[10px] font-black text-orange-500">IN LAVORAZIONE</span>}
+                            </div>
                           </div>
                           <div className={`p-8 rounded-2xl border-2 transition-all ${skin.phases.Macchina.isCompleted ? 'bg-green-500/10 border-green-500' : 'bg-slate-950 border-slate-800'}`}>
                             <div className="flex justify-between items-center mb-6">
                               <span className="text-xs font-black uppercase tracking-widest">2. Macchina (30%)</span>
                               <div className="flex items-center gap-3">{skin.phases.Macchina.isCompleted && <span className="text-[10px] font-black text-green-500">COMPLETATO</span>}<input type="checkbox" checked={skin.phases.Macchina.isCompleted} onChange={() => updateSkinPhase(selectedMsn.id, activeSkin, 'Macchina', { isCompleted: !skin.phases.Macchina.isCompleted })} className="w-6 h-6 accent-indigo-500" /></div>
                             </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{MACHINE_ASSETS.map(asset => <button key={asset} onClick={() => updateSkinPhase(selectedMsn.id, activeSkin, 'Macchina', { asset, isCompleted: true })} className={`py-3 rounded-xl text-[8px] font-black uppercase transition-all border ${skin.phases.Macchina.asset === asset ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>{asset}</button>)}</div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{MACHINE_ASSETS.map(asset => {
+                              const detail = skin.phases.Macchina.machineDetails?.find(d => d.asset === asset);
+                              const isSelected = !!detail || skin.phases.Macchina.asset === asset;
+
+                              let colorClass = 'bg-slate-900 border-slate-800 text-slate-500 hover:border-indigo-500/50';
+                              let percentageText = '';
+
+                              if (isSelected) {
+                                const percentage = detail?.percentage ?? 100;
+                                percentageText = `${percentage}%`;
+
+                                if (percentage === 100) colorClass = 'bg-indigo-600 border-indigo-500 text-white';
+                                else if (percentage >= 75) colorClass = 'bg-indigo-500 border-indigo-500 text-white';
+                                else if (percentage >= 50) colorClass = 'bg-yellow-500 border-yellow-500 text-slate-950';
+                                else if (percentage >= 25) colorClass = 'bg-orange-500 border-orange-500 text-white';
+                                else colorClass = 'bg-red-500 border-red-500 text-white';
+                              }
+
+                              return (
+                                <button key={asset} onClick={() => toggleMachine(selectedMsn.id, activeSkin, asset)} className={`relative py-4 rounded-xl text-[9px] font-black uppercase transition-all border flex flex-col items-center justify-center gap-1 ${colorClass}`}>
+                                  <span>{asset}</span>
+                                  {isSelected && (
+                                    <div onClick={(e) => e.stopPropagation()} className="mt-1">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max="100"
+                                        value={detail?.percentage ?? 100}
+                                        onChange={(e) => updateMachinePercentage(selectedMsn.id, activeSkin, asset, parseInt(e.target.value) || 0)}
+                                        className="w-12 bg-black/30 border border-white/20 rounded text-center text-white font-bold"
+                                      />
+                                      <span className="text-[8px] ml-1 opacity-80">%</span>
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}</div>
                           </div>
-                          <div onClick={() => updateSkinPhase(selectedMsn.id, activeSkin, 'Completamento', { isCompleted: !skin.phases.Completamento.isCompleted })} className={`p-8 rounded-2xl border-2 transition-all cursor-pointer ${skin.phases.Completamento.isCompleted ? 'bg-green-500/10 border-green-500' : 'bg-slate-950 border-slate-800'}`}>
-                            <div className="flex justify-between"><span className="text-xs font-black uppercase tracking-widest">3. Completamento (30%)</span>{skin.phases.Completamento.isCompleted && <span className="text-[10px] font-black text-green-500">COMPLETATO</span>}</div>
+                          <div onClick={() => {
+                            const currentP = skin.phases.Completamento.progress ?? (skin.phases.Completamento.isCompleted ? 100 : 0);
+                            let newP = 0;
+                            if (currentP === 0) newP = 50;
+                            else if (currentP < 100) newP = 100;
+                            else newP = 0;
+                            updateSkinPhase(selectedMsn.id, activeSkin, 'Completamento', { isCompleted: newP === 100, progress: newP });
+                          }} className={`p-8 rounded-2xl border-2 transition-all cursor-pointer ${skin.phases.Completamento.isCompleted ? 'bg-green-500/10 border-green-500' : (skin.phases.Completamento.progress && skin.phases.Completamento.progress > 0) ? 'bg-orange-500/10 border-orange-500' : 'bg-slate-950 border-slate-800'}`}>
+                            <div className="flex justify-between">
+                              <span className="text-xs font-black uppercase tracking-widest">3. Completamento (30%)</span>
+                              {skin.phases.Completamento.isCompleted && <span className="text-[10px] font-black text-green-500">COMPLETATO</span>}
+                              {!skin.phases.Completamento.isCompleted && (skin.phases.Completamento.progress ?? 0) > 0 && <span className="text-[10px] font-black text-orange-500">IN LAVORAZIONE</span>}
+                            </div>
                           </div>
                           <div className={`p-8 rounded-2xl border-2 transition-all ${skin.phases['Quality Gate'].isCompleted ? (skin.phases['Quality Gate'].status === 'KO' ? 'bg-red-500/10 border-red-500' : 'bg-green-500/10 border-green-500') : 'bg-slate-950 border-slate-800'}`}>
                             <div className="flex justify-between items-center mb-6">
@@ -867,9 +1056,15 @@ export default function App() {
               <div className="space-y-8">
                 <div className="bg-slate-900 p-10 rounded-[3rem] border border-slate-800 space-y-8">
                   {selectedMsn.deptSchedules[activeDept].operations.map((op, idx) => (
-                    <div key={op.id} onClick={() => toggleOp(selectedMsn.id, activeDept, op.id)} className={`flex items-center gap-6 p-8 rounded-3xl border-2 transition-all cursor-pointer ${op.isCompleted ? 'bg-green-500/10 border-green-500/50' : 'bg-slate-950 border-slate-800 hover:border-indigo-500/30'}`}>
-                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border-2 ${op.isCompleted ? 'bg-green-500 border-green-500 text-slate-950' : 'border-slate-800 text-slate-600'}`}>{op.isCompleted && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth="4" /></svg>}</div>
-                      <span className={`text-sm font-black uppercase tracking-widest ${op.isCompleted ? 'text-slate-400 line-through' : 'text-white'}`}>{idx + 1}. {op.name}</span>
+                    <div key={op.id} onClick={() => toggleOp(selectedMsn.id, activeDept, op.id)} className={`flex items-center gap-6 p-8 rounded-3xl border-2 transition-all cursor-pointer ${op.state === 'done' || op.isCompleted ? 'bg-green-500/10 border-green-500/50' : op.state === 'doing' ? 'bg-orange-500/10 border-orange-500/50' : 'bg-slate-950 border-slate-800 hover:border-indigo-500/30'}`}>
+                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border-2 ${op.state === 'done' || op.isCompleted ? 'bg-green-500 border-green-500 text-slate-950' : op.state === 'doing' ? 'bg-orange-500 border-orange-500 text-white' : 'border-slate-800 text-slate-600'}`}>
+                        {(op.state === 'done' || op.isCompleted) && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth="4" /></svg>}
+                        {op.state === 'doing' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                      </div>
+                      <span className={`text-sm font-black uppercase tracking-widest ${op.state === 'done' || op.isCompleted ? 'text-slate-400 line-through' : op.state === 'doing' ? 'text-orange-400' : 'text-white'}`}>
+                        {idx + 1}. {op.name}
+                        {op.state === 'doing' && <span className="ml-2 text-[10px] bg-orange-500 text-white px-2 py-0.5 rounded-md">IN LAVORAZIONE</span>}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -993,6 +1188,15 @@ export default function App() {
             )}
           </div>
         </div>
+      )}
+      {showUpdateImport && (
+        <ImportUpdatesModal
+          onClose={() => setShowUpdateImport(false)}
+          onSuccess={() => {
+            setShowUpdateImport(false);
+            loadData();
+          }}
+        />
       )}
     </div>
   );

@@ -11,10 +11,17 @@ export type SkinType = '5384' | '5671' | '5646' | '5651' | '5656';
 
 export type MachineAsset = 'Brotje 1597' | 'Brotje 1570' | 'Brotje 1569' | 'Brotje 1679' | 'Recoules 199' | 'Recoules 198';
 
+export interface MachineDetail {
+  asset: MachineAsset;
+  percentage: number;
+}
+
 export interface SkinPhaseState {
   isCompleted: boolean;
-  asset?: MachineAsset; // Solo per fase Macchina
+  asset?: MachineAsset; // DEPRECATED: Use machineDetails
+  machineDetails?: MachineDetail[]; // Support multiple machines
   status?: 'OK' | 'KO'; // Solo per Quality Gate
+  progress?: number; // 0-100. If 100, isCompleted should be true.
 }
 
 export interface SkinWork {
@@ -31,6 +38,7 @@ export interface Operation {
   id: string;
   name: string;
   isCompleted: boolean;
+  state?: 'todo' | 'doing' | 'done'; // For sequential clicks: todo -> doing (Orange) -> done (Green)
 }
 
 export type DiscrepancySeverity = 'Low' | 'Medium' | 'High' | 'Critical';
