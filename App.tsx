@@ -69,11 +69,18 @@ const createInitialSkins = (): SkinWork[] => SKIN_TYPES.map(type => ({
 const INITIAL_OPS: Record<Department, string[]> = {
   [Department.AUTOMATIZZATI]: [],
   [Department.PANNELLI]: [
-    'Accoppiamento 5384 + 5671 (Unione Bottom)',
-    'Montaggio Frame e Secondaria Bottom',
-    'Montaggio Frame e Secondaria Crown',
-    'Montaggio Frame e Secondaria Side SX',
-    'Montaggio Frame e Secondaria Side DX'
+    'SIDE PNL LH PRIMARIA',
+    'SIDE PNL RH PRIMARIA',
+    'STTG FRAME BTT ASSY',
+    'HOUSING',
+    'JOINT 41 ENGITECH',
+    'BTT CARGO ASSY INST',
+    'LINING LH RH',
+    'CROWN PRIMARIA',
+    'SECONDARIA SIDE LH',
+    'SECONDARIA SIDE RH',
+    'SECONDARIA CRW',
+    'SECONDARIA BTT'
   ],
   [Department.TOP]: [
     'Preparazione Unione Pannelli (Side DX, Side SX, Bottom, Crown)',
@@ -598,7 +605,7 @@ export default function App() {
     try {
       await databaseService.updateMSN(msnId, { deptSchedules: newSchedules });
     } catch (e) {
-      console.error("Failed to update skin", e);
+      console.error("Failed to update skin phase", e);
       loadData();
     }
   };
