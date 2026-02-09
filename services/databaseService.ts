@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { MSNUnit } from '../types';
+import { MSNUnit, Department } from '../types';
 
 export interface DatabaseMSNUnit {
     id: string;
@@ -27,7 +27,7 @@ const dbToApp = (dbUnit: DatabaseMSNUnit): MSNUnit => ({
     endDate: dbUnit.end_date,
     wrappingDate: dbUnit.wrapping_date,
     plannedShippingDate: dbUnit.planned_shipping_date,
-    currentDepartment: dbUnit.current_department,
+    currentDepartment: dbUnit.current_department as Department,
     deptSchedules: dbUnit.dept_schedules,
     discrepancies: dbUnit.discrepancies,
     shipped: dbUnit.shipped,
