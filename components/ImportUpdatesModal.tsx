@@ -206,19 +206,29 @@ export const ImportUpdatesModal: React.FC<ImportUpdatesModalProps> = ({ onClose,
                                 console.log(`[Import] Updates for MSN ${update.msn}:`, update.operationUpdates.map(u => u.operationName));
 
                                 const newOperations = schedule.operations.map((op: any) => {
+                                    // Normalize names by removing content in parentheses and extra spaces
+                                    const normalize = (name: string) => name.replace(/\s*\(.*?\)\s*/g, '').trim().toUpperCase();
+
+                                    const dbNameNormalized = normalize(op.name);
+
                                     const updateForOp = update.operationUpdates.find(
-                                        u => u.operationName.toUpperCase() === op.name.toUpperCase()
+                                        u => {
+                                            const excelNameNormalized = normalize(u.operationName);
+                                            // Try exact match first, then normalized match
+                                            return u.operationName.toUpperCase() === op.name.toUpperCase() ||
+                                                excelNameNormalized === dbNameNormalized;
+                                        }
                                     );
 
                                     if (updateForOp) {
-                                        console.log(`[Import] MATCH! "${op.name}" -> state: ${updateForOp.state}, completed: ${updateForOp.isCompleted}`);
+                                        console.log(`[Import] MATCH! "${op.name}" (Excel: "${updateForOp.operationName}") -> state: ${updateForOp.state}, completed: ${updateForOp.isCompleted}`);
                                         return {
                                             ...op,
                                             isCompleted: updateForOp.isCompleted,
                                             state: updateForOp.state
                                         };
                                     } else {
-                                        console.log(`[Import] NO MATCH for "${op.name}"`);
+                                        console.log(`[Import] NO MATCH for "${op.name}" (Normalized: "${dbNameNormalized}")`);
                                     }
                                     return op;
                                 });
