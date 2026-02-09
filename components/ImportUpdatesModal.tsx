@@ -118,22 +118,33 @@ export const ImportUpdatesModal: React.FC<ImportUpdatesModalProps> = ({ onClose,
 
                     for (const update of parsedUpdates) {
                         const msnUnit = allMsns.find(u => u.msn === update.msn);
+                        console.log(`[Import] Processing MSN ${update.msn}, found in DB:`, !!msnUnit);
+
                         if (msnUnit) {
                             let currentMsn = updatesMap.get(msnUnit.id) || msnUnit;
                             const schedule = currentMsn.deptSchedules?.[Department.PANNELLI];
 
+                            console.log(`[Import] MSN ${update.msn} has schedule:`, !!schedule);
+                            console.log(`[Import] MSN ${update.msn} operations count:`, schedule?.operations?.length);
+
                             if (schedule && schedule.operations) {
+                                console.log(`[Import] Current operations for MSN ${update.msn}:`, schedule.operations.map((o: any) => o.name));
+                                console.log(`[Import] Updates for MSN ${update.msn}:`, update.operationUpdates.map(u => u.operationName));
+
                                 const newOperations = schedule.operations.map((op: any) => {
                                     const updateForOp = update.operationUpdates.find(
                                         u => u.operationName.toUpperCase() === op.name.toUpperCase()
                                     );
 
                                     if (updateForOp) {
+                                        console.log(`[Import] MATCH! "${op.name}" -> state: ${updateForOp.state}, completed: ${updateForOp.isCompleted}`);
                                         return {
                                             ...op,
                                             isCompleted: updateForOp.isCompleted,
                                             state: updateForOp.state
                                         };
+                                    } else {
+                                        console.log(`[Import] NO MATCH for "${op.name}"`);
                                     }
                                     return op;
                                 });
@@ -146,6 +157,7 @@ export const ImportUpdatesModal: React.FC<ImportUpdatesModalProps> = ({ onClose,
 
                                 const updatedMsn = { ...currentMsn, deptSchedules: newDeptSchedules };
                                 updatesMap.set(msnUnit.id, updatedMsn);
+                                console.log(`[Import] Added MSN ${update.msn} to updates map`);
                             }
                         }
                     }

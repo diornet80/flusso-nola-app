@@ -160,70 +160,78 @@ export const parsePannelliSheet = (sheet: XLSX.WorkSheet): ParsedPannelliUpdate[
     const updates: ParsedPannelliUpdate[] = [];
     const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:Z100');
 
-    // Find MSN row (looking for "MSN" or numbers in first few rows)
-    let msnRowIndex = -1;
-    for (let R = 0; R <= Math.min(10, range.e.r); R++) {
-        const cellA = sheet[XLSX.utils.encode_cell({ c: 0, r: R })];
-        const cellB = sheet[XLSX.utils.encode_cell({ c: 1, r: R })];
+    console.log('[Pannelli Parser] Starting parse, range:', range);
 
-        // Look for "MSN" keyword or "CUMULATO LEO" pattern
-        if (cellA && String(cellA.v).toUpperCase().includes('MSN')) {
-            msnRowIndex = R;
-            break;
-        }
-        if (cellB && String(cellB.v).toUpperCase().includes('MSN')) {
-            msnRowIndex = R;
-            break;
-        }
-    }
+    // MSNs are in row 4 (index 3), starting from column H (index 7)
+    const msnRowIndex = 3;
 
-    if (msnRowIndex === -1) {
-        console.warn('MSN row not found in Pannelli sheet');
-        return updates;
-    }
+    console.log('[Pannelli Parser] Using fixed MSN row index:', msnRowIndex);
 
-    // Extract MSN values from columns (skip first 2-3 columns which are labels)
+    // Extract MSN values from columns starting at column H (index 7)
     const msnColumns: Array<{ col: number; msn: string }> = [];
-    for (let C = 3; C <= range.e.c; C++) {
+    for (let C = 7; C <= range.e.c; C++) {
         const msnCell = sheet[XLSX.utils.encode_cell({ c: C, r: msnRowIndex })];
         if (msnCell && msnCell.v) {
             const msnValue = String(msnCell.v).trim();
+            console.log(`[Pannelli Parser] Column ${C} MSN candidate: "${msnValue}"`);
             if (msnValue && /^\d+$/.test(msnValue)) {
                 msnColumns.push({ col: C, msn: msnValue });
+                console.log(`[Pannelli Parser] Added MSN: ${msnValue} at column ${C}`);
             }
         }
     }
+
+    console.log('[Pannelli Parser] Found MSN columns:', msnColumns);
 
     if (msnColumns.length === 0) {
         console.warn('No MSN columns found in Pannelli sheet');
         return updates;
     }
 
-    // Find operation rows (start after MSN row, look for operation names in column 1)
+    // Operations are in specific rows:
+    // Rows 10-17 (indices 9-16): operations 1-8 (Primaria)
+    // Rows 19-22 (indices 18-21): operations 9-12 (Secondaria)
     const operationRows: Array<{ row: number; name: string }> = [];
-    for (let R = msnRowIndex + 1; R <= range.e.r; R++) {
-        const nameCell = sheet[XLSX.utils.encode_cell({ c: 1, r: R })];
-        if (nameCell && nameCell.v) {
-            let opName = String(nameCell.v).trim();
 
-            // Normalize operation names
-            if (opName.includes('JOINT 41 ENGITECH')) {
-                opName = 'JOINT 41 DITTA';
-            }
+    // Define the exact row ranges
+    const rowRanges = [
+        { start: 9, end: 16 },  // Rows 10-17 (operations 1-8)
+        { start: 18, end: 21 }  // Rows 19-22 (operations 9-12)
+    ];
 
-            // Skip header rows or empty rows
-            if (opName && opName.length > 3 && !opName.toUpperCase().includes('DESCRIZIONE')) {
-                operationRows.push({ row: R, name: opName });
+    for (const range of rowRanges) {
+        for (let R = range.start; R <= range.end; R++) {
+            const nameCell = sheet[XLSX.utils.encode_cell({ c: 3, r: R })]; // Column D (index 3)
+            if (nameCell && nameCell.v) {
+                let opName = String(nameCell.v).trim();
+
+                console.log(`[Pannelli Parser] Row ${R} (Excel row ${R + 1}) operation: "${opName}"`);
+
+                // Normalize operation names
+                if (opName.includes('JOINT 41 ENGITECH')) {
+                    opName = 'JOINT 41 DITTA';
+                }
+
+                if (opName && opName.length > 3) {
+                    operationRows.push({ row: R, name: opName });
+                    console.log(`[Pannelli Parser] Added operation: "${opName}" at row ${R}`);
+                }
             }
         }
     }
+
+    console.log('[Pannelli Parser] Found operation rows:', operationRows.length);
 
     // Parse data for each MSN
     msnColumns.forEach(({ col, msn }) => {
         const operationUpdates: ParsedPannelliUpdate['operationUpdates'] = [];
 
+        console.log(`[Pannelli Parser] Processing MSN ${msn} at column ${col}`);
+
         operationRows.forEach(({ row, name }) => {
             const valueCell = sheet[XLSX.utils.encode_cell({ c: col, r: row })];
+
+            console.log(`[Pannelli Parser] MSN ${msn}, Op "${name}": value="${valueCell?.v}"`);
 
             if (valueCell && valueCell.v != null) {
                 let percentage = 0;
@@ -253,6 +261,8 @@ export const parsePannelliSheet = (sheet: XLSX.WorkSheet): ParsedPannelliUpdate[
                     isCompleted = false;
                 }
 
+                console.log(`[Pannelli Parser] MSN ${msn}, Op "${name}": percentage=${percentage}, state=${state}`);
+
                 operationUpdates.push({
                     operationName: name,
                     percentage,
@@ -263,6 +273,7 @@ export const parsePannelliSheet = (sheet: XLSX.WorkSheet): ParsedPannelliUpdate[
         });
 
         if (operationUpdates.length > 0) {
+            console.log(`[Pannelli Parser] Adding update for MSN ${msn} with ${operationUpdates.length} operations`);
             updates.push({
                 msn,
                 operationUpdates
@@ -270,5 +281,6 @@ export const parsePannelliSheet = (sheet: XLSX.WorkSheet): ParsedPannelliUpdate[
         }
     });
 
+    console.log('[Pannelli Parser] Total updates:', updates.length);
     return updates;
 };
