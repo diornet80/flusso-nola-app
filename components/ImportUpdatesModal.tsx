@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Department } from '../types';
-import { parseAutomatedSheet } from '../services/excelParser';
+import { parseAutomatedSheet, parsePannelliSheet } from '../services/excelParser';
 import { databaseService } from '../services/databaseService';
 
 interface ImportUpdatesModalProps {
@@ -99,6 +99,68 @@ export const ImportUpdatesModal: React.FC<ImportUpdatesModalProps> = ({ onClose,
                         onSuccess();
                     }, 1500);
 
+                } else if (selectedDept === Department.PANNELLI) {
+                    const parsedUpdates = parsePannelliSheet(sheet);
+
+                    if (parsedUpdates.length === 0) {
+                        setStatus('Nessun aggiornamento trovato nel file.');
+                        setIsScanning(false);
+                        return;
+                    }
+
+                    setStatus(`Trovati ${parsedUpdates.length} aggiornamenti. Applicazione in corso...`);
+
+                    // Fetch all MSNs to update
+                    const allMsns = await databaseService.fetchAllMSNs();
+                    let updatedCount = 0;
+
+                    const updatesMap = new Map<string, any>();
+
+                    for (const update of parsedUpdates) {
+                        const msnUnit = allMsns.find(u => u.msn === update.msn);
+                        if (msnUnit) {
+                            let currentMsn = updatesMap.get(msnUnit.id) || msnUnit;
+                            const schedule = currentMsn.deptSchedules?.[Department.PANNELLI];
+
+                            if (schedule && schedule.operations) {
+                                const newOperations = schedule.operations.map((op: any) => {
+                                    const updateForOp = update.operationUpdates.find(
+                                        u => u.operationName.toUpperCase() === op.name.toUpperCase()
+                                    );
+
+                                    if (updateForOp) {
+                                        return {
+                                            ...op,
+                                            isCompleted: updateForOp.isCompleted,
+                                            state: updateForOp.state
+                                        };
+                                    }
+                                    return op;
+                                });
+
+                                const newSchedule = { ...schedule, operations: newOperations };
+                                const newDeptSchedules = {
+                                    ...currentMsn.deptSchedules,
+                                    [Department.PANNELLI]: newSchedule
+                                };
+
+                                const updatedMsn = { ...currentMsn, deptSchedules: newDeptSchedules };
+                                updatesMap.set(msnUnit.id, updatedMsn);
+                            }
+                        }
+                    }
+
+                    if (updatesMap.size > 0) {
+                        const msnsToUpdate = Array.from(updatesMap.values());
+                        await databaseService.upsertMSNs(msnsToUpdate);
+                        updatedCount = msnsToUpdate.length;
+                    }
+
+                    setStatus(`Importazione completata! ${updatedCount} MSN aggiornati.`);
+                    setTimeout(() => {
+                        onSuccess();
+                    }, 1500);
+
                 } else {
                     setStatus('Importazione per questo reparto non ancora supportata.');
                 }
@@ -138,7 +200,7 @@ export const ImportUpdatesModal: React.FC<ImportUpdatesModalProps> = ({ onClose,
                             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-bold text-white focus:outline-none focus:border-indigo-500"
                         >
                             <option value={Department.AUTOMATIZZATI}>Automatizzati</option>
-                            <option value={Department.PANNELLI} disabled>Pannelli (Prossimamente)</option>
+                            <option value={Department.PANNELLI}>Pannelli</option>
                             <option value={Department.TOP} disabled>Top (Prossimamente)</option>
                             <option value={Department.FINALE} disabled>Finale (Prossimamente)</option>
                         </select>

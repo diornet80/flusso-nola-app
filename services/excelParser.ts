@@ -144,3 +144,131 @@ export const parseAutomatedSheet = (sheet: XLSX.WorkSheet): ParsedSkinUpdate[] =
 
     return updates;
 };
+
+// Pannelli Department Parser
+interface ParsedPannelliUpdate {
+    msn: string;
+    operationUpdates: Array<{
+        operationName: string;
+        percentage: number;
+        isCompleted: boolean;
+        state: 'todo' | 'doing' | 'done';
+    }>;
+}
+
+export const parsePannelliSheet = (sheet: XLSX.WorkSheet): ParsedPannelliUpdate[] => {
+    const updates: ParsedPannelliUpdate[] = [];
+    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:Z100');
+
+    // Find MSN row (looking for "MSN" or numbers in first few rows)
+    let msnRowIndex = -1;
+    for (let R = 0; R <= Math.min(10, range.e.r); R++) {
+        const cellA = sheet[XLSX.utils.encode_cell({ c: 0, r: R })];
+        const cellB = sheet[XLSX.utils.encode_cell({ c: 1, r: R })];
+
+        // Look for "MSN" keyword or "CUMULATO LEO" pattern
+        if (cellA && String(cellA.v).toUpperCase().includes('MSN')) {
+            msnRowIndex = R;
+            break;
+        }
+        if (cellB && String(cellB.v).toUpperCase().includes('MSN')) {
+            msnRowIndex = R;
+            break;
+        }
+    }
+
+    if (msnRowIndex === -1) {
+        console.warn('MSN row not found in Pannelli sheet');
+        return updates;
+    }
+
+    // Extract MSN values from columns (skip first 2-3 columns which are labels)
+    const msnColumns: Array<{ col: number; msn: string }> = [];
+    for (let C = 3; C <= range.e.c; C++) {
+        const msnCell = sheet[XLSX.utils.encode_cell({ c: C, r: msnRowIndex })];
+        if (msnCell && msnCell.v) {
+            const msnValue = String(msnCell.v).trim();
+            if (msnValue && /^\d+$/.test(msnValue)) {
+                msnColumns.push({ col: C, msn: msnValue });
+            }
+        }
+    }
+
+    if (msnColumns.length === 0) {
+        console.warn('No MSN columns found in Pannelli sheet');
+        return updates;
+    }
+
+    // Find operation rows (start after MSN row, look for operation names in column 1)
+    const operationRows: Array<{ row: number; name: string }> = [];
+    for (let R = msnRowIndex + 1; R <= range.e.r; R++) {
+        const nameCell = sheet[XLSX.utils.encode_cell({ c: 1, r: R })];
+        if (nameCell && nameCell.v) {
+            let opName = String(nameCell.v).trim();
+
+            // Normalize operation names
+            if (opName.includes('JOINT 41 ENGITECH')) {
+                opName = 'JOINT 41 DITTA';
+            }
+
+            // Skip header rows or empty rows
+            if (opName && opName.length > 3 && !opName.toUpperCase().includes('DESCRIZIONE')) {
+                operationRows.push({ row: R, name: opName });
+            }
+        }
+    }
+
+    // Parse data for each MSN
+    msnColumns.forEach(({ col, msn }) => {
+        const operationUpdates: ParsedPannelliUpdate['operationUpdates'] = [];
+
+        operationRows.forEach(({ row, name }) => {
+            const valueCell = sheet[XLSX.utils.encode_cell({ c: col, r: row })];
+
+            if (valueCell && valueCell.v != null) {
+                let percentage = 0;
+
+                if (typeof valueCell.v === 'number') {
+                    percentage = valueCell.v <= 1 ? Math.round(valueCell.v * 100) : valueCell.v;
+                } else if (typeof valueCell.v === 'string') {
+                    const cleaned = valueCell.v.replace(',', '.').replace('%', '').trim();
+                    const parsed = parseFloat(cleaned);
+                    if (!isNaN(parsed)) {
+                        percentage = (parsed <= 1 && parsed !== 0) ? Math.round(parsed * 100) : parsed;
+                    }
+                }
+
+                // Determine state based on percentage
+                let state: 'todo' | 'doing' | 'done' = 'todo';
+                let isCompleted = false;
+
+                if (percentage >= 100) {
+                    state = 'done';
+                    isCompleted = true;
+                } else if (percentage > 0) {
+                    state = 'doing';
+                    isCompleted = false;
+                } else {
+                    state = 'todo';
+                    isCompleted = false;
+                }
+
+                operationUpdates.push({
+                    operationName: name,
+                    percentage,
+                    isCompleted,
+                    state
+                });
+            }
+        });
+
+        if (operationUpdates.length > 0) {
+            updates.push({
+                msn,
+                operationUpdates
+            });
+        }
+    });
+
+    return updates;
+};
