@@ -421,3 +421,227 @@ export const parseTopSheet = (sheet: XLSX.WorkSheet): ParsedTopUpdate[] => {
     console.log('[TOP Parser] Total updates:', updates.length);
     return updates;
 };
+
+// FINALE Department Parser
+interface ParsedFinaleUpdate {
+    msn: string;
+    operationUpdates: Array<{
+        operationName: string;
+        percentage: number;
+        isCompleted: boolean;
+        state: 'todo' | 'doing' | 'done';
+    }>;
+}
+
+export const parseFinaleSheet = (sheet: XLSX.WorkSheet): ParsedFinaleUpdate[] => {
+    const updates: ParsedFinaleUpdate[] = [];
+    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:Z100');
+
+    console.log('[Finale Parser] Starting parse, range:', range);
+
+    // MSNs are in row 3 (index 2), starting from column H (index 7) based on user "MSN DA H3"
+    const msnRowIndex = 2; // H3 is row 3 (0-indexed 2)
+
+    console.log('[Finale Parser] Using fixed MSN row index:', msnRowIndex);
+
+    // Extract MSN values from columns starting at column H (index 7)
+    const msnColumns: Array<{ col: number; msn: string }> = [];
+    for (let C = 7; C <= range.e.c; C++) {
+        const msnCell = sheet[XLSX.utils.encode_cell({ c: C, r: msnRowIndex })];
+        if (msnCell && msnCell.v) {
+            const msnValue = String(msnCell.v).trim();
+            console.log(`[Finale Parser] Column ${C} MSN candidate: "${msnValue}"`);
+            if (msnValue && /^\d+$/.test(msnValue)) {
+                msnColumns.push({ col: C, msn: msnValue });
+                console.log(`[Finale Parser] Added MSN: ${msnValue} at column ${C}`);
+            }
+        }
+    }
+
+    console.log('[Finale Parser] Found MSN columns:', msnColumns);
+
+    if (msnColumns.length === 0) {
+        console.warn('No MSN columns found in Finale sheet');
+        return updates;
+    }
+
+    // Operations are in rows 6-9 (indices 5-8) in Column F (index 5) based on user "operazioni da F6 a F9"
+    const operationRows: Array<{ row: number; name: string }> = [];
+
+    // Rows 6, 7, 8, 9 correspond to indices 5, 6, 7, 8
+    const opStartRow = 5;
+    const opEndRow = 8;
+    const nameColIndex = 5; // Column F is index 5
+
+    for (let R = opStartRow; R <= opEndRow; R++) {
+        const nameCell = sheet[XLSX.utils.encode_cell({ c: nameColIndex, r: R })];
+        if (nameCell && nameCell.v) {
+            let opName = String(nameCell.v).trim();
+            // Normalize spaces
+            opName = opName.replace(/\s+/g, ' ');
+
+            console.log(`[Finale Parser] Row ${R} (Excel row ${R + 1}) operation: "${opName}"`);
+
+            if (opName) {
+                operationRows.push({ row: R, name: opName });
+            }
+        }
+    }
+
+    console.log('[Finale Parser] Found operation rows:', operationRows.length);
+
+    // Parse data for each MSN
+    msnColumns.forEach(({ col, msn }) => {
+        const operationUpdates: ParsedFinaleUpdate['operationUpdates'] = [];
+
+        console.log(`[Finale Parser] Processing MSN ${msn} at column ${col}`);
+
+        operationRows.forEach(({ row, name }) => {
+            const valueCell = sheet[XLSX.utils.encode_cell({ c: col, r: row })];
+
+            console.log(`[Finale Parser] MSN ${msn}, Op "${name}": value="${valueCell?.v}"`);
+
+            if (valueCell && valueCell.v != null) {
+                let percentage = 0;
+
+                if (typeof valueCell.v === 'number') {
+                    percentage = valueCell.v <= 1 ? Math.round(valueCell.v * 100) : valueCell.v;
+                } else if (typeof valueCell.v === 'string') {
+                    const cleaned = valueCell.v.replace(',', '.').replace('%', '').trim();
+                    const parsed = parseFloat(cleaned);
+                    if (!isNaN(parsed)) {
+                        percentage = (parsed <= 1 && parsed !== 0) ? Math.round(parsed * 100) : parsed;
+                    }
+                }
+
+                // Determine state based on percentage
+                let state: 'todo' | 'doing' | 'done' = 'todo';
+                let isCompleted = false;
+
+                if (percentage >= 100) {
+                    state = 'done';
+                    isCompleted = true;
+                } else if (percentage > 0) {
+                    state = 'doing';
+                    isCompleted = false;
+                } else {
+                    state = 'todo';
+                    isCompleted = false;
+                }
+
+                console.log(`[Finale Parser] MSN ${msn}, Op "${name}": percentage=${percentage}, state=${state}`);
+
+                operationUpdates.push({
+                    operationName: name,
+                    percentage,
+                    isCompleted,
+                    state
+                });
+            }
+        });
+
+        if (operationUpdates.length > 0) {
+            console.log(`[Finale Parser] Adding update for MSN ${msn} with ${operationUpdates.length} operations`);
+            updates.push({
+                msn,
+                operationUpdates
+            });
+        }
+    });
+
+    console.log('[Finale Parser] Total updates:', updates.length);
+    return updates;
+};
+
+export const parseFinitureTopSheet = (sheet: XLSX.WorkSheet): ParsedFinaleUpdate[] => {
+    const updates: ParsedFinaleUpdate[] = [];
+    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:Z200');
+
+    console.log('[Finiture Top Parser] Starting parse, range:', range);
+
+    // User Config:
+    // MSN starts at G3 -> Row 2 (0-indexed), Column 6 (G is 7th letter, index 6)
+    const msnRowIndex = 2;
+    const msnStartColIndex = 6; // G
+
+    // Operations are at E6 and E7 -> Row 5 and 6 (0-indexed), Column 4 (E is 5th letter, index 4)
+    const opNameColIndex = 4; // E
+    const opRowIndices = [5, 6]; // Row 6 and 7
+
+    console.log('[Finiture Top Parser] Using fixed MSN row index:', msnRowIndex, 'Start Col:', msnStartColIndex);
+
+    const msnColumns: Array<{ col: number; msn: string }> = [];
+    for (let C = msnStartColIndex; C <= range.e.c; C++) {
+        const msnCell = sheet[XLSX.utils.encode_cell({ c: C, r: msnRowIndex })];
+        if (msnCell && msnCell.v) {
+            const msnValue = String(msnCell.v).trim();
+            if (msnValue && /^\d+$/.test(msnValue)) {
+                msnColumns.push({ col: C, msn: msnValue });
+            }
+        }
+    }
+    console.log('[Finiture Top Parser] Found MSN columns:', msnColumns);
+
+    if (msnColumns.length === 0) return updates;
+
+    // Read Operation Names from E6 and E7
+    const operationRows: Array<{ row: number; name: string }> = [];
+    opRowIndices.forEach(rowIndex => {
+        const cell = sheet[XLSX.utils.encode_cell({ c: opNameColIndex, r: rowIndex })];
+        if (cell && cell.v) {
+            const val = String(cell.v).trim().toUpperCase().replace(/\s+/g, ' ');
+            // Verify if it matches our expected names? Or just take what's there?
+            // User said "E6, E7 PER GLI MSN DA G3 IN POI, PER L'AGGIORNAMENTO DA G6 E G7 IN POI"
+            // So we trust these rows contain the relevant ops.
+            // We can Map them to our internal constant names if needed, or rely on string match.
+            // Internal names: 'SEALING TOP BARREL', 'PAINTING E SEALING'
+            console.log(`[Finiture Top Parser] Read Op Name at E${rowIndex + 1}: "${val}"`);
+            operationRows.push({ row: rowIndex, name: val });
+        }
+    });
+
+
+    // Parse data
+    msnColumns.forEach(({ col, msn }) => {
+        const operationUpdates: ParsedFinaleUpdate['operationUpdates'] = [];
+
+        operationRows.forEach(({ row, name }) => {
+            const valueCell = sheet[XLSX.utils.encode_cell({ c: col, r: row })];
+            if (valueCell && valueCell.v != null) {
+                let percentage = 0;
+                if (typeof valueCell.v === 'number') {
+                    percentage = valueCell.v <= 1 ? Math.round(valueCell.v * 100) : valueCell.v;
+                } else if (typeof valueCell.v === 'string') {
+                    const cleaned = valueCell.v.replace(',', '.').replace('%', '').trim();
+                    const parsed = parseFloat(cleaned);
+                    if (!isNaN(parsed)) {
+                        percentage = (parsed <= 1 && parsed !== 0) ? Math.round(parsed * 100) : parsed;
+                    }
+                }
+
+                let state: 'todo' | 'doing' | 'done' = 'todo';
+                let isCompleted = false;
+
+                if (percentage >= 100) {
+                    state = 'done';
+                    isCompleted = true;
+                } else if (percentage > 0) {
+                    state = 'doing';
+                }
+
+                operationUpdates.push({
+                    operationName: name,
+                    percentage,
+                    isCompleted,
+                    state
+                });
+            }
+        });
+
+        if (operationUpdates.length > 0) {
+            updates.push({ msn, operationUpdates });
+        }
+    });
+
+    return updates;
+};

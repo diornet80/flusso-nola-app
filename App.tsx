@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Department, MSNUnit, Operation, DeptSchedule, SkinType, SkinWork, MachineAsset, Discrepancy, DiscrepancySeverity } from './types';
+import { INITIAL_OPS } from './constants';
 import { parseMsnDocument } from './services/geminiService';
 import { databaseService } from './services/databaseService';
 import { ImportUpdatesModal } from './components/ImportUpdatesModal';
@@ -65,57 +66,6 @@ const createInitialSkins = (): SkinWork[] => SKIN_TYPES.map(type => ({
     'Quality Gate': { isCompleted: false, status: 'OK' }
   }
 }));
-
-const INITIAL_OPS: Record<Department, string[]> = {
-  [Department.AUTOMATIZZATI]: [],
-  [Department.PANNELLI]: [
-    'SIDE PNL LH PRIMARIA',
-    'SIDE PNL RH PRIMARIA',
-    'STTG FRAME BTT ASSY',
-    'HOUSING',
-    'JOINT 41 DITTA',
-    'BTT CARGO ASSY INST',
-    'LINING LH RH',
-    'CROWN PRIMARIA',
-    'SECONDARIA SIDE LH',
-    'SECONDARIA SIDE RH',
-    'SECONDARIA CRW',
-    'SECONDARIA BTT'
-  ],
-  [Department.TOP]: [
-    'TOP ASSY STRUCTURE (SCALO)',
-    'LAP JOINT STRINGER 6LH (SCALO)',
-    'LAP JOINT STRINGER 6RH (SCALO)',
-    'LAP JOINT STRINGER 32 LH (SCALO)',
-    'LAP JOINT STRINGER 32 RH (SCALO)',
-    'PAX FLOOR INST ACF (SCALO)',
-    'TOP BRACKET INST (F/S SCALO)',
-    'TOP BARREL (F/S SCALO)',
-    'TOP ASSY EQUIPPED (F/S SCALO)',
-    'END WALL INST (F/S SCALO)',
-    'END WALL ASSY (F/S SCALO)',
-    'FLOOR BEAM ASSY 35.0 ACF',
-    'FLOOR BEAM ASSY 35.1 ACF',
-    'FLOOR BEAM ASSY 35.2 ACF',
-    'FLOOR BEAM ASSY 35.3 ACF',
-    'FLOOR BEAM ASSY 35.4 ACF',
-    'FLOOR BEAM ASSY 35.5 ACF',
-    'FLOOR BEAM ASSY 35.6 ACF',
-    'FLOOR BEAM ASSY 35.7 ACF',
-    'PAX FLOOR ACF BRACKET INSTL',
-    'PAX FLOOR ASSY EQUIPPED ACF',
-  ],
-  [Department.FINALE]: [
-    'Verniciatura',
-    'Applicazione Olio',
-    'Gestione Discrepanze Finali',
-    'Controlli Laser',
-    'Controlli Finali Post-Vernice'
-  ],
-  [Department.IMBALLAGGIO]: [
-    'Wrapping'
-  ]
-};
 
 const createMsnSchedules = (start: string) => {
   const schedules: any = {};
@@ -780,7 +730,7 @@ export default function App() {
                     <ProgressBar label="Automatizzati" progress={getDeptProgress(u, Department.AUTOMATIZZATI)} isKO={u.deptSchedules?.[Department.AUTOMATIZZATI]?.skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO') ?? false} />
                     <ProgressBar label="Pannelli" progress={getDeptProgress(u, Department.PANNELLI)} isKO={u.deptSchedules?.[Department.PANNELLI]?.qualityStatus === 'KO'} />
                     <ProgressBar label="Top" progress={getDeptProgress(u, Department.TOP)} isKO={u.deptSchedules?.[Department.TOP]?.qualityStatus === 'KO'} />
-                    <ProgressBar label="Finale" progress={getDeptProgress(u, Department.FINALE)} isKO={u.deptSchedules?.[Department.FINALE]?.qualityStatus === 'KO'} />
+                    <ProgressBar label="Finiture" progress={getDeptProgress(u, Department.FINALE)} isKO={u.deptSchedules?.[Department.FINALE]?.qualityStatus === 'KO'} />
                     <ProgressBar label="Imballaggio" progress={getDeptProgress(u, Department.IMBALLAGGIO)} />
                   </div>
                 </div>
@@ -918,7 +868,7 @@ export default function App() {
                 return (
                   <button key={dept} onClick={() => { setActiveDept(dept); setView('dept-flow'); setActiveSkin(null); }} className={`p-10 rounded-[2.5rem] border-2 transition-all flex flex-col items-center gap-6 shadow-xl ${isKO ? 'bg-red-500/10 border-red-500/50 hover:border-red-500' : p === 100 ? 'bg-green-500/10 border-green-500/50' : 'bg-slate-900 border-slate-800 hover:border-indigo-500'}`}>
                     <div className={`w-16 h-16 rounded-full flex items-center justify-center font-black text-lg ${isKO ? 'bg-red-500 text-white' : p === 100 ? 'bg-green-500 text-slate-950' : 'bg-slate-800 text-indigo-400'}`}>{p}%</div>
-                    <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${isKO ? 'text-red-500' : ''}`}>{dept} {isKO && '(KO)'}</span>
+                    <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${isKO ? 'text-red-500' : ''}`}>{dept === Department.FINALE ? 'Finiture' : dept} {isKO && '(KO)'}</span>
                   </button>
                 );
               })}
@@ -941,7 +891,7 @@ export default function App() {
             <div className="flex items-center gap-6">
               <button onClick={() => setView('unit')} className="p-4 bg-slate-900 rounded-2xl border border-slate-800"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeWidth="3" /></svg></button>
               <div>
-                <h3 className="text-3xl font-black italic text-white tracking-tighter">Reparto {activeDept}</h3>
+                <h3 className="text-3xl font-black italic text-white tracking-tighter">Reparto {activeDept === Department.FINALE ? 'Finiture' : activeDept}</h3>
                 <div className="flex gap-4 mt-2">
                   <span className="text-[10px] font-bold text-slate-500 uppercase">Inizio: {selectedMsn.deptSchedules?.[activeDept]?.startDate}</span>
                   <span className="text-[10px] font-bold text-indigo-400 uppercase">Fine: {selectedMsn.deptSchedules?.[activeDept]?.endDate}</span>
