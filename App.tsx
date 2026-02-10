@@ -177,7 +177,13 @@ export default function App() {
   };
 
   const dashboardMsns = useMemo(() => {
-    return msns.filter(u => !isMsnReady(u) && !u.shipped && u.msn.toLowerCase().includes(searchTerm.toLowerCase()));
+    return msns
+      .filter(u => !isMsnReady(u) && !u.shipped && u.msn.toLowerCase().includes(searchTerm.toLowerCase()))
+      .sort((a, b) => {
+        if (!a.plannedShippingDate) return 1;
+        if (!b.plannedShippingDate) return -1;
+        return new Date(a.plannedShippingDate).getTime() - new Date(b.plannedShippingDate).getTime();
+      });
   }, [msns, searchTerm, isMsnReady]);
 
   const readyMsns = useMemo(() => {
