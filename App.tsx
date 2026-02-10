@@ -5,6 +5,7 @@ import { Department, MSNUnit, Operation, DeptSchedule, SkinType, SkinWork, Machi
 import { INITIAL_OPS } from './constants';
 import { parseMsnDocument } from './services/geminiService';
 import { databaseService } from './services/databaseService';
+import { parseDatesSheet, ParsedDateUpdate } from './services/excelParser';
 import { ImportUpdatesModal } from './components/ImportUpdatesModal';
 
 const STORAGE_KEY = 'chicken-track-v2-data'; // DEPRECATED: Using Supabase
@@ -283,6 +284,78 @@ export default function App() {
         console.error('Error updating MSN:', error);
       }
     }
+  };
+
+  const handleEditMsn = (msnId: string) => {
+    const msn = msns.find(m => m.id === msnId);
+    if (!msn) return;
+
+    setManualMsn(msn.msn);
+    setManualStartDate(msn.startDate || new Date().toISOString().split('T')[0]);
+    setManualEndDate(msn.endDate || new Date().toISOString().split('T')[0]);
+    setManualWrappingDate(msn.wrappingDate || '');
+    setManualShippingDate(msn.plannedShippingDate || '');
+
+    setMsnToOverwriteManual(msn);
+    setImportMode('manual');
+    setShowImport(true);
+  };
+
+  const handleImportDates = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsScanning(true);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = evt.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+        const dateUpdates = parseDatesSheet(sheet);
+
+        if (dateUpdates.length === 0) {
+          alert('Nessun dato valido trovato nel file.');
+          setIsScanning(false);
+          return;
+        }
+
+        // Fetch current MSNs to map MSN -> ID and preserve other data
+        const currentMsns = await databaseService.fetchAllMSNs();
+        const batchMap = new Map<string, MSNUnit>();
+
+        for (const update of dateUpdates) {
+          const existing = currentMsns.find(m => m.msn === update.msn);
+          if (existing) {
+            batchMap.set(update.msn, {
+              ...existing,
+              startDate: update.startDate || existing.startDate,
+              endDate: update.endDate || existing.endDate,
+              wrappingDate: update.wrappingDate || existing.wrappingDate,
+              plannedShippingDate: update.plannedShippingDate || existing.plannedShippingDate
+            });
+          }
+        }
+
+        const batch = Array.from(batchMap.values());
+
+        if (batch.length > 0) {
+          await databaseService.upsertMSNs(batch);
+          alert(`Importazione completata: ${batch.length} MSN aggiornati.`);
+          loadData();
+        } else {
+          alert('Nessun MSN corrispondente trovato nel database.');
+        }
+      } catch (err) {
+        console.error('Error importing dates:', err);
+        alert('Errore durante l\'importazione delle date.');
+      } finally {
+        setIsScanning(false);
+        e.target.value = ''; // Reset input
+      }
+    };
+    reader.readAsBinaryString(file);
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -676,6 +749,23 @@ export default function App() {
             )}
           </button>
           <button onClick={() => setShowUpdateImport(true)} className="bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all text-white shadow-lg shadow-indigo-600/20">Aggiorna Reparti</button>
+
+          <div className="relative group">
+            <button
+              onClick={() => document.getElementById('date-import-input')?.click()}
+              className="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+            >
+              Importa Date
+            </button>
+            <input
+              type="file"
+              id="date-import-input"
+              accept=".xlsx, .xls"
+              onChange={handleImportDates}
+              className="hidden"
+            />
+          </div>
+
           <button onClick={() => { setShowImport(true); setImportMode('file'); }} className="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all">Importa MSN</button>
         </div>
       </header>
@@ -726,6 +816,38 @@ export default function App() {
                     </div>
                     <div className="bg-slate-800 text-slate-400 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border border-slate-700">Production</div>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">Produzione</p>
+                      <div className="flex justify-between items-center text-[10px] font-black text-slate-300">
+                        <span>{u.startDate ? new Date(u.startDate).toLocaleDateString() : '-'}</span>
+                        <span className="text-slate-600">→</span>
+                        <span>{u.endDate ? new Date(u.endDate).toLocaleDateString() : '-'}</span>
+                      </div>
+                    </div>
+                    <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">Spedizione/Imb.</p>
+                      <div className="flex flex-col text-[10px] font-black text-slate-300">
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Imb:</span>
+                          <span>{u.wrappingDate ? new Date(u.wrappingDate).toLocaleDateString() : '-'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Ship:</span>
+                          <span className={u.plannedShippingDate ? 'text-indigo-400' : ''}>{u.plannedShippingDate ? new Date(u.plannedShippingDate).toLocaleDateString() : '-'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleEditMsn(u.id); }}
+                    className="absolute top-6 right-16 z-10 p-2.5 bg-slate-950/50 rounded-xl text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all opacity-0 group-hover:opacity-100 border border-transparent hover:border-indigo-500/20"
+                    title="Modifica Date"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </button>
                   <div className="space-y-4">
                     <ProgressBar label="Automatizzati" progress={getDeptProgress(u, Department.AUTOMATIZZATI)} isKO={u.deptSchedules?.[Department.AUTOMATIZZATI]?.skins?.some(s => s.phases['Quality Gate'].isCompleted && s.phases['Quality Gate'].status === 'KO') ?? false} />
                     <ProgressBar label="Pannelli" progress={getDeptProgress(u, Department.PANNELLI)} isKO={u.deptSchedules?.[Department.PANNELLI]?.qualityStatus === 'KO'} />

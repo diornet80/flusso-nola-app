@@ -645,3 +645,109 @@ export const parseFinitureTopSheet = (sheet: XLSX.WorkSheet): ParsedFinaleUpdate
 
     return updates;
 };
+
+export interface ParsedDateUpdate {
+    msn: string;
+    startDate?: string;
+    endDate?: string;
+    wrappingDate?: string;
+    plannedShippingDate?: string;
+}
+
+export const parseDatesSheet = (sheet: XLSX.WorkSheet): ParsedDateUpdate[] => {
+    const updates: ParsedDateUpdate[] = [];
+    const ref = sheet['!ref'];
+    if (!ref) {
+        console.warn('[Dates Parser] Sheet has no reference range.');
+        return [];
+    }
+    const range = XLSX.utils.decode_range(ref);
+
+    console.log('[Dates Parser] Starting parse, range:', ref, 'Total rows:', range.e.r + 1);
+
+    // Columns Configuration (0-indexed)
+    // MSN: Column D (Index 3)
+    // Start Production: Column E (Index 4)
+    // End Production: Column F (Index 5)
+    // Wrapping: Column H (Index 7)
+    // Shipping: Column I (Index 8)
+
+    // Iterate through all rows
+    for (let R = 0; R <= range.e.r; R++) {
+        // Read MSN
+        const msnCell = sheet[XLSX.utils.encode_cell({ c: 3, r: R })];
+        if (!msnCell || msnCell.v == null) continue;
+
+        const rawMsn = String(msnCell.v).trim();
+        // Relaxed MSN check: must contain at least 4 digits
+        if (rawMsn && /\d{4,}/.test(rawMsn)) {
+            const msn = rawMsn;
+
+            const parseDate = (col: number): string | undefined => {
+                const cell = sheet[XLSX.utils.encode_cell({ c: col, r: R })];
+                if (!cell || cell.v == null) return undefined;
+
+                // 1. If it's already a JS Date object (common with cellDates: true)
+                if (cell.v instanceof Date) {
+                    return cell.v.toISOString().split('T')[0];
+                }
+
+                // 2. Excel serial date number
+                if (typeof cell.v === 'number') {
+                    try {
+                        const date = XLSX.SSF.parse_date_code(cell.v);
+                        if (date) {
+                            return `${date.y}-${String(date.m).padStart(2, '0')}-${String(date.d).padStart(2, '0')}`;
+                        }
+                    } catch (e) {
+                        // silent fail
+                    }
+                }
+
+                // 3. String date
+                if (typeof cell.v === 'string') {
+                    const val = cell.v.trim();
+                    if (!val) return undefined;
+
+                    // Try DD/MM/YYYY or D/M/YYYY
+                    const parts = val.split(/[\/\-]/);
+                    if (parts.length === 3) {
+                        // Check if first part is year or day
+                        if (parts[0].length === 4) {
+                            return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+                        } else {
+                            const y = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+                            return `${y}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                        }
+                    }
+
+                    // Try standard JS date parse
+                    const d = new Date(val);
+                    if (!isNaN(d.getTime())) {
+                        return d.toISOString().split('T')[0];
+                    }
+                }
+                return undefined;
+            };
+
+            const startDate = parseDate(4); // E
+            const endDate = parseDate(5);   // F
+            const wrappingDate = parseDate(7); // H
+            const plannedShippingDate = parseDate(8); // I
+
+            if (startDate || endDate || wrappingDate || plannedShippingDate) {
+                console.log(`[Dates Parser] Row ${R + 1}: Found MSN=${msn}`, { startDate, endDate, wrappingDate, plannedShippingDate });
+                updates.push({
+                    msn,
+                    startDate,
+                    endDate,
+                    wrappingDate,
+                    plannedShippingDate
+                });
+            }
+        }
+    }
+
+    console.log(`[Dates Parser] Finished. Found ${updates.length} valid date updates.`);
+    return updates;
+};
