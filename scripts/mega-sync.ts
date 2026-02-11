@@ -96,15 +96,18 @@ async function megaSync() {
 
             // Force update if count doesn't match OR if it's the Top department (to be sure)
             if (currentOps.length !== targetOpsList.length || dept === Department.TOP) {
+                const usedIds = new Set<string>();
                 const updatedOps = targetOpsList.map(newName => {
-                    // Mapping logic for JOINT 41
                     const oldName = newName === 'JOINT 41 DITTA' ? 'JOINT 41 ENGITECH' : newName;
 
-                    // Find matching or best fit
-                    const existing = currentOps.find((o: any) => o.name === oldName || o.name === newName);
+                    // Find matching op that HASN'T been used yet
+                    const existing = currentOps.find((o: any) => (o.name === oldName || o.name === newName) && !usedIds.has(o.id));
+
+                    const id = existing?.id || Math.random().toString(36).substr(2, 9);
+                    usedIds.add(id);
 
                     return {
-                        id: existing?.id || Math.random().toString(36).substr(2, 9),
+                        id,
                         name: newName,
                         isCompleted: existing?.isCompleted || false,
                         state: existing?.state || 'todo'

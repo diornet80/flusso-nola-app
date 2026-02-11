@@ -85,13 +85,17 @@ async function sync() {
         // Update PANNELLI
         if (newSchedules[Department.PANNELLI]) {
             const currentOps = newSchedules[Department.PANNELLI].operations || [];
+            const usedIds = new Set<string>();
             const updatedOps = NEW_OPS[Department.PANNELLI].map(newName => {
                 // Try to find matching existing op (even if renamed)
                 const oldName = newName === 'JOINT 41 DITTA' ? 'JOINT 41 ENGITECH' : newName;
-                const existing = currentOps.find((o: any) => o.name === oldName || o.name === newName);
+                const existing = currentOps.find((o: any) => (o.name === oldName || o.name === newName) && !usedIds.has(o.id));
+
+                const id = existing?.id || Math.random().toString(36).substr(2, 9);
+                usedIds.add(id);
 
                 return {
-                    id: existing?.id || Math.random().toString(36).substr(2, 9),
+                    id,
                     name: newName,
                     isCompleted: existing?.isCompleted || false,
                     state: existing?.state || 'todo'
@@ -107,10 +111,14 @@ async function sync() {
         // Update TOP
         if (newSchedules[Department.TOP]) {
             const currentOps = newSchedules[Department.TOP].operations || [];
+            const usedIds = new Set<string>();
             const updatedOps = NEW_OPS[Department.TOP].map(newName => {
-                const existing = currentOps.find((o: any) => o.name === newName);
+                const existing = currentOps.find((o: any) => o.name === newName && !usedIds.has(o.id));
+                const id = existing?.id || Math.random().toString(36).substr(2, 9);
+                usedIds.add(id);
+
                 return {
-                    id: existing?.id || Math.random().toString(36).substr(2, 9),
+                    id,
                     name: newName,
                     isCompleted: existing?.isCompleted || false,
                     state: existing?.state || 'todo'

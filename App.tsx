@@ -499,7 +499,6 @@ export default function App() {
     const msn = msns.find(m => m.id === msnId);
     if (!msn) return;
 
-    // Deep clone schedule to avoid mutation issues
     const schedule = msn.deptSchedules?.[dept];
     if (!schedule) return;
 
@@ -507,14 +506,19 @@ export default function App() {
       if (op.id !== opId) return op;
 
       // Cycle: Todo -> Doing -> Done -> Todo
+      // We'll keep the cycle but ensure it's predictable
       let newState: 'todo' | 'doing' | 'done' = 'doing';
       let isCompleted = false;
 
       if (op.state === 'doing') {
         newState = 'done';
         isCompleted = true;
-      } else if (op.isCompleted || op.state === 'done') { // Check isCompleted for backward compatibility
+      } else if (op.state === 'done' || op.isCompleted) {
         newState = 'todo';
+        isCompleted = false;
+      } else {
+        // From todo go to doing
+        newState = 'doing';
         isCompleted = false;
       }
 
@@ -526,7 +530,6 @@ export default function App() {
       [dept]: { ...schedule, operations: newOps }
     };
 
-    // Optimistic update
     setMsns(prev => prev.map(m => m.id !== msnId ? m : { ...m, deptSchedules: newSchedules }));
 
     try {

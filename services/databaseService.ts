@@ -35,19 +35,21 @@ const dbToApp = (dbUnit: DatabaseMSNUnit): MSNUnit => ({
 });
 
 // Convert app format to database format
-const appToDb = (appUnit: Partial<MSNUnit>): Partial<DatabaseMSNUnit> => ({
-    msn: appUnit.msn,
-    part_number: appUnit.partNumber,
-    start_date: appUnit.startDate,
-    end_date: appUnit.endDate,
-    wrapping_date: appUnit.wrappingDate,
-    planned_shipping_date: appUnit.plannedShippingDate,
-    current_department: appUnit.currentDepartment,
-    dept_schedules: appUnit.deptSchedules,
-    discrepancies: appUnit.discrepancies,
-    shipped: appUnit.shipped,
-    shipped_at: appUnit.shippedAt
-});
+const appToDb = (appUnit: Partial<MSNUnit>): Partial<DatabaseMSNUnit> => {
+    const db: any = {};
+    if (appUnit.msn !== undefined) db.msn = appUnit.msn;
+    if (appUnit.partNumber !== undefined) db.part_number = appUnit.partNumber;
+    if (appUnit.startDate !== undefined) db.start_date = appUnit.startDate;
+    if (appUnit.endDate !== undefined) db.end_date = appUnit.endDate;
+    if (appUnit.wrappingDate !== undefined) db.wrapping_date = appUnit.wrappingDate;
+    if (appUnit.plannedShippingDate !== undefined) db.planned_shipping_date = appUnit.plannedShippingDate;
+    if (appUnit.currentDepartment !== undefined) db.current_department = appUnit.currentDepartment;
+    if (appUnit.deptSchedules !== undefined) db.dept_schedules = appUnit.deptSchedules;
+    if (appUnit.discrepancies !== undefined) db.discrepancies = appUnit.discrepancies;
+    if (appUnit.shipped !== undefined) db.shipped = appUnit.shipped;
+    if (appUnit.shippedAt !== undefined) db.shipped_at = appUnit.shippedAt;
+    return db;
+};
 
 export const databaseService = {
     // Fetch all MSN units
